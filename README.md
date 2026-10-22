@@ -247,11 +247,19 @@ macOS Python 3.9.
 | Boot image packing | header version 0, page 0x1000, kernel 0x8000 / ramdisk 0x1000000 / tags 0x100 — read off this unit's own `boot` and `recovery` headers, which agree, and pinned by the checker |
 | Board DTB | `Resources/DTBs/clover.{dtb,dts}` cut from this unit's boot image, record `037` of 111; the checker is at 0 errors / 0 warnings |
 | Real build | done: `build_uefi.py -d clover` on the colima guest compiles BootShim, resolves `Conf`, builds every module, and writes `FVMAIN_COMPACT` at exactly `0x300000` (27% full), `SILICIUM_UEFI.fd`, the gzipped FD and `Mu-clover.img` — no warnings |
-| Packing, unverified | `build_uefi.py` forwards a `[boot_image]` key only when it is truthy, so `base` cannot be set to 0 and mkbootimg's `0x10000000` default stands, and it never passes `--pagesize` at all.  The packed `Mu-clover.img` therefore declares 0x10008000 / 0x11000000 / 0x10000100 with 2048-byte pages, where this unit's own boot header says 0x8000 / 0x1000000 / 0x100 with 4096 — `scripts/decode-boot-header.py` prints both side by side.  The UniXNU path is unaffected (it packs from `board.toml`'s `[bootimg.image]`, base 0, page 4096); the standalone image is not a flash candidate until that is reconciled |
+| Packing, to check first | `build_uefi.py` forwards a `[boot_image]` key only when it is truthy, so `base` cannot be set to 0 and mkbootimg's `0x10000000` default stands, and it never passes `--pagesize` at all.  The packed `Mu-clover.img` therefore declares 0x10008000 / 0x11000000 / 0x10000100 with 2048-byte pages, where this unit's own boot header says 0x8000 / 0x1000000 / 0x100 with 4096 — `scripts/decode-boot-header.py` prints both side by side.  Every Mu device shares that default, so it is probably what ABL ignores; `fastboot boot` is the way to find out without committing to it.  The UniXNU path is unaffected (it packs from `board.toml`'s `[bootimg.image]`, base 0, page 4096) |
 
-Flashing this firmware means writing a new `xbl` partition, the one the signed
-boot chain starts from: a bad image there is the recoverable kind of bad only as
-long as PBL still accepts the EDL path.  Nothing here has been flashed.
+Flashing this does **not** touch `xbl`.  `clover.toml` declares `[boot_image]`,
+the same output type lavender and the rest of the Xiaomi entries use: the
+firm volume, fronted by `BootShim`, is packed as the *kernel* of an android boot
+image, and stock ABL loads and jumps to it exactly as it would a Linux kernel.
+So the partition is `boot` (mmcblk0p12, 67108864 bytes), which this repository's
+board-side twin already holds a byte-complete dump of, and the bootloader on
+this unit is unlocked (`androidboot.verifiedbootstate=orange`), so
+`fastboot flash boot` is reversible in one command — and `fastboot boot
+Mu-clover.img` tests it without writing anything at all.  `p-xbl.bin` is in the
+dump as well, full partition size, which is the fall-back if that assumption is
+ever wrong.  Nothing has been flashed.
 
 ## License
 

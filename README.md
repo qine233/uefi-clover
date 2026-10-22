@@ -231,6 +231,29 @@ Mu packages only exist in a real checkout.  The TOML groups use `tomllib`,
 `tomli`, or the built-in subset reader, so the whole check runs on the stock
 macOS Python 3.9.
 
+## Trying it on the tablet
+
+Zero writes, reversible by a power cycle, so this is the first on-device test:
+
+```sh
+adb reboot bootloader          # or hold Power+Volume-Down from off
+fastboot devices               # must list 81ffcaaa
+fastboot boot ~/clover-out/Mu-clover.img
+```
+
+What counts as a result: a Mu boot menu (or any change from the stock splash) means
+the firmware volume was entered; a black screen means nothing yet, since display is
+the part this board has not proven.  A hang recovers with Power+Volume-Down held for
+10-20 seconds -- `fastboot boot` leaves no partition touched.
+
+If it only works as a flashed image, `boot` is `mmcblk0p12` and its stock contents are
+dumped in the board repository at `facts/<serial>-<stamp>/img/unixnu-boot.img`, exactly
+the partition's 67108864 bytes:
+
+```sh
+fastboot flash boot ~/UniXNU-clover/facts/81ffcaaa-20261022-210928/img/unixnu-boot.img
+```
+
 ## Status
 
 | | |

@@ -11,6 +11,7 @@ Mapping applied:
 
     Platforms/Xiaomi/cloverPkg/**  ->  Platforms/Xiaomi/cloverPkg/**
     Resources/Configs/clover.toml  ->  Resources/Configs/clover.toml
+    Resources/DTBs/clover.dtb      ->  Resources/DTBs/clover.dtb
     proprietary-files.txt          ->  Platforms/Xiaomi/cloverPkg/proprietary-files.txt
 
 Everything else in this repository (scripts/, README.md, LICENSE) is overlay
@@ -34,11 +35,21 @@ REPO = HERE.parents[1]
 PKG_REL = pathlib.Path("Platforms/Xiaomi/cloverPkg")
 
 # Files the overlay owns, relative to its own root, and where they land.
-COPIED = [PKG_REL, pathlib.Path("Resources/Configs/clover.toml")]
+# The DTB is the board's own downstream device tree, cut out of this tablet's
+# boot image (scripts/split-clover-dtbs.py); build_uefi.py appends
+# Resources/DTBs/<device>.dtb to the UEFI FD when it writes the android kernel.
+COPIED = [PKG_REL, pathlib.Path("Resources/Configs/clover.toml"),
+          pathlib.Path("Resources/DTBs/clover.dtb"),
+          pathlib.Path("Resources/DTBs/clover.dts")]
+
 DOC = pathlib.Path("proprietary-files.txt")
 
+# "Binaries" is absent on purpose, as in cloverPkg/DeviceBuild.py: the upstream
+# Device-Binaries dump has no clover entry, so filling that submodule would
+# download gigabytes of other people's firmware and still leave clover without
+# a single blob.
 SUBMODULES = ["Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI",
-              "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl", "Binaries"]
+              "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
 
 
 def note(mark: str, message: str) -> None:
@@ -99,7 +110,7 @@ def copy_plan(uefi: pathlib.Path, sources: list[pathlib.Path]):
         owned.add(relative)
         target = uefi / relative
         (update if target.is_file() else create).append(relative)
-    if DOC.is_file():
+    if (REPO / DOC).is_file():
         # Carried next to the package so a checkout documents its own blob needs.
         landing = PKG_REL / DOC.name
         target = uefi / landing

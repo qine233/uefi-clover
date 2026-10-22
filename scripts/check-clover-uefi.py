@@ -667,15 +667,13 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
         if fd.get(key) != want:
             problems.append(f"clover.toml [uefi_fd] {key} = {fd.get(key)}, "
                             f"MemoryMapLib and the device tree say {hex(want)}")
-    if fd.get("blocks") is None:
-        # build_uefi.py's compile_uefi() does hex(fd_config.get("blocks")) with no
-        # default, so the standalone path needs the key; gta4l's config omits it
-        # the same way this one does, and UniXNU's firmware.py never reads it
-        # (it computes size // 0x1000 itself).  Warn rather than diverge from the
-        # board that is known to work.
-        warnings.append("clover.toml [uefi_fd] has no blocks= ; `build_uefi.py -d clover` "
-                        "would raise in compile_uefi(). Add `blocks = 0x300` there if the "
-                        "standalone path is wanted; the UniXNU firmware step does not read it")
+    if fd.get("blocks") is not None:
+        # Verified against the checkout (build_uefi.py, before compile_uefi()):
+        #   fd_config["blocks"] = fd_config["size"] // 4096
+        # so the key is computed, never read -- upstream's own device configs do
+        # not carry it.  UniXNU's firmware.py derives it the same way.
+        warnings.append("clover.toml [uefi_fd] sets blocks=, but build_uefi.py overwrites "
+                        "it with size // 4096; drop the key like every other device config")
     # firmware.py asserts the produced FD is exactly [uefi_fd] size bytes, and it
     # passes base/size/blocks as -D FD_BASE/-D FD_SIZE/-D FD_BLOCKS to EDK II, so
     # clover.fdf must use the macros rather than a hardcoded number.

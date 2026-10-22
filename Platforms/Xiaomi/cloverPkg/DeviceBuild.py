@@ -56,8 +56,12 @@ class SettingsManager (UpdateSettingsManager, SetupSettingsManager, PrEvalSettin
         return CommonPlatform.TargetsSupported
 
     def GetRequiredSubmodules (self):
+        # "Binaries" is deliberately absent.  Every other device gets its prebuilt
+        # QcomPkg DXEs from the Project-Silicium/Device-Binaries submodule, but that
+        # repository has no clover entry: these blobs came out of this tablet's own
+        # xbl partition (Binaries/clover, see proprietary-files.txt), so fetching the
+        # submodule would download ~5 GB of other people's firmware and add nothing.
         return [
-            RequiredSubmodule ("Binaries", True),
             RequiredSubmodule ("Common/Mu", True),
             RequiredSubmodule ("Common/Mu_OEM_Sample", True),
             RequiredSubmodule ("Mu_Basecore", True),

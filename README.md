@@ -70,8 +70,7 @@ numbers against `board.toml`.
 ## Setup
 
 ```sh
-git clone --recurse-submodules https://github.com/Project-Silicium/Mu-Silicium
-cd uefi-clover
+bash scripts/fetch-mu-silicium.sh ../Mu-Silicium     # see "Build host" below
 python3 scripts/apply-clover-overlay.py --uefi ../Mu-Silicium
 ```
 
@@ -99,13 +98,55 @@ cd UniXNU
 cd ../Mu-Silicium && python3 build_uefi.py -d clover
 ```
 
-Two caveats, both verified against upstream's own source: `compile_uefi()` reads
-`fd_config["blocks"]` with no default and `[uefi_fd] blocks` is not in a device
-config that works today (gta4l's has the same shape as this one), so add
-`blocks = 0x300` locally if you go this way; and `append_dtb = true` makes
-packing read `Resources/DTBs/clover.dtb`, which this repository does not ship —
-build it from the board kernel with `dtc`, the command is in the checker's
-warning.
+That is the path this repository is actually tested through.  Two things about
+it, both read out of upstream's `build_uefi.py` rather than assumed:
+
+* `blocks` is not a config key.  `compile_uefi()` sets
+  `fd_config["blocks"] = fd_config["size"] // 4096` before it shells out, so
+  `[uefi_fd]` carries `base` and `size` only, exactly like every device config
+  that builds today.  The checker warns if a `blocks` line sneaks in.
+* `append_dtb = true` makes packing read `Resources/DTBs/clover.dtb`.  That file
+  is the tablet's own downstream device tree, cut out of the boot image this
+  unit dumped (`scripts/split-clover-dtbs.py` finds the 111-record table that
+  follows the gzip stream; `scripts/scan-clover-dtbs.sh` names each record).
+  Record `037` is the one the stock bootloader selects: `model` "SDM 660 PM660 +
+  PM660L QRD", `qcom,msm-id = <0x13d>` (317), `qcom,board-id = <0x1000b>`, and
+  it is the only sdm660 blob carrying this panel,
+  `qcom,mdss_dsi_nt51021_boe_wuxga_video`.  Both `.dtb` and the `dtc`-generated
+  `.dts` ship here, the same pair upstream keeps for all 163 other devices.
+
+## Build host
+
+macOS cannot build this (CLANGPDB cross-compiles to AArch64 PE/COFF with Linux
+system headers), so the compile runs in a Linux guest and everything else stays
+on this machine.  The route that works from this network, end to end:
+
+```sh
+bash    scripts/fetch-mu-silicium.sh ~/mu-clover      # pinned-SHA fetch, no --recursive
+bash    scripts/build-clover-uefi.sh                  # colima guest, then build
+```
+
+`fetch-mu-silicium.sh` exists because `git clone --recursive` does not survive
+here: direct GitHub transport stalls at 0-22 KB/s, while
+`https://gh-proxy.com/https://github.com/…` answers `fetch` by arbitrary SHA at
+~450 KB/s.  The script therefore takes every commit from the parent tree's own
+`git submodule status` -- never a branch name -- and asserts each checkout with
+`git rev-parse HEAD`.  It stops at `Mu-Silicium@42fe5637` and its submodules,
+plus one level deeper: **mu_basecore vendors nine more repositories** (libfdt,
+mipisyst, two brotli copies, oniguruma, libspdm, cmocka, googletest, subhook)
+that a tarball fetch silently drops.  edk2 validates every `[Includes]` line of
+each `.dec` it parses, so a missing submodule aborts with
+`File/directory not found in workspace MdePkg.dec(33)` before a single file
+compiles.  `Binaries` (Device-Binaries) is skipped on purpose, see below.
+
+`build-clover-uefi.sh` provisions an Ubuntu 24.04 arm64 guest under colima's
+`clover` profile (lima + docker binaries installed by hand, because Homebrew is
+unusable while the Xcode license prompt is unanswered), installs upstream's own
+dependency set (`setup_env.sh -p apt` plus `pip-requirements.txt`) against USTC
+and Tencent mirrors, re-applies this overlay, rsyncs the tree into the guest,
+runs `stuart_update` *after* the sync (it installs extdeps inside the tree), and
+finishes with `build_uefi.py -d clover`.  It is idempotent; `OVERLAY`,
+`CHECKOUT`, `VM_CPUS` and friends are environment overrides at the top.
 
 ## What UniXNU adds to a stock device package
 
@@ -204,7 +245,8 @@ macOS Python 3.9.
 | Board-id / DRAM / userdata / GIC | dumped and applied — `scripts/dump-clover-facts.sh` in the board repo, results under `facts/` |
 | Second DRAM bank | not described; `0x100000000 + 0x7E4C0000` needs a map row and a second `/chosen` window before XNU sees past 4 GiB |
 | Boot image packing | header version 0, page 0x1000, kernel 0x8000 / ramdisk 0x1000000 / tags 0x100 — read off this unit's own `boot` and `recovery` headers, which agree, and pinned by the checker |
-| Real build | unverified — the overlay is complete and self-consistent, but no Mu-Silicium checkout has been assembled on this host yet |
+| Board DTB | `Resources/DTBs/clover.{dtb,dts}` cut from this unit's boot image, record `037` of 111; the checker is at 0 errors / 0 warnings |
+| Real build | toolchain proven end-to-end on the colima guest: BootShim compiles (`clang -target aarch64-linux-gnu` + `llvm-objcopy`), `Conf` templates resolve, EDK II reaches `Build.py` and starts parsing `clover.dsc`.  Not yet linked into an FV |
 
 Flashing this firmware means writing a new `xbl` partition, the one the signed
 boot chain starts from: a bad image there is the recoverable kind of bad only as

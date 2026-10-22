@@ -1,15 +1,17 @@
 ##
 #  clover: the DXE-dispatch checkpoint driver.
 #
-#  Draws the stage-3 band at its own entry and then records the rest of the DXE
-#  phase: one cyan band per architecture/core protocol that appears, at an offset
-#  that names it (Include/Checkpoint.h).  It links nothing of the platform's and
-#  depends on nothing, so it is dispatched even when the vendor blobs behind it
-#  are not; that is the point of having it in APRIORI.
+#  Draws the stage-3 band at its own entry, paints every slot of the ladder black,
+#  and recolours one slot per module that appears, at an offset that names it
+#  (Include/Checkpoint.h).  It links nothing of the platform's and depends on
+#  nothing, so it is dispatched even when the vendor blobs behind it are not; that
+#  is the point of having it in APRIORI.
 #
-#  The [Protocols] list is only a declaration of what it notifies on.  A band
-#  still appears for a protocol produced before this driver ran, because
-#  RegisterProtocolNotify reports pre-existing instances.
+#  The [Protocols] list is only a declaration of what it notifies on.  A band still
+#  appears for a protocol produced before this driver ran, because
+#  RegisterProtocolNotify reports pre-existing instances.  The six Qualcomm and
+#  EmbeddedPkg GUIDs are local to the C file and not listed here, because naming
+#  them would add packages this bring-up instrument should not need.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
@@ -33,20 +35,24 @@
   UefiBootServicesTableLib
 
 [Protocols]
-  gEfiGraphicsOutputProtocolGuid   ## CONSUMES
-  gEfiCpuArchProtocolGuid          ## CONSUMES
-  gEfiWatchdogTimerArchProtocolGuid ## CONSUMES
-  gEfiTimerArchProtocolGuid        ## CONSUMES
-  gEfiRealTimeClockArchProtocolGuid ## CONSUMES
-  gEfiVariableArchProtocolGuid     ## CONSUMES
-  gEfiVariableWriteArchProtocolGuid ## CONSUMES
-  gEfiBlockIoProtocolGuid          ## CONSUMES
-  gEfiSimpleFileSystemProtocolGuid ## CONSUMES
-  gEfiBdsArchProtocolGuid          ## CONSUMES
-  gEfiUsbIoProtocolGuid            ## CONSUMES
   gEfiFirmwareVolume2ProtocolGuid  ## CONSUMES
+  gEfiCpuArchProtocolGuid          ## CONSUMES
   gEfiRuntimeArchProtocolGuid      ## CONSUMES
   gEfiSecurityArchProtocolGuid     ## CONSUMES
+  gEfiWatchdogTimerArchProtocolGuid ## CONSUMES
+  gEfiVariableArchProtocolGuid     ## CONSUMES
+  gEfiVariableWriteArchProtocolGuid ## CONSUMES
+  gEfiMonotonicCounterArchProtocolGuid ## CONSUMES
+  gEfiRealTimeClockArchProtocolGuid ## CONSUMES
+  gEfiMetronomeArchProtocolGuid    ## CONSUMES
+  gEfiTimerArchProtocolGuid        ## CONSUMES
+  gEfiBlockIoProtocolGuid          ## CONSUMES
+  gEfiDiskIoProtocolGuid           ## CONSUMES
+  gEfiPartitionInfoProtocolGuid    ## CONSUMES
+  gEfiSimpleFileSystemProtocolGuid ## CONSUMES
+  gEfiUnicodeCollation2ProtocolGuid ## CONSUMES
+  gEfiGraphicsOutputProtocolGuid   ## CONSUMES
+  gEfiBdsArchProtocolGuid          ## CONSUMES
 
 [Depex]
   TRUE

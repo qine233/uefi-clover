@@ -7,10 +7,17 @@
   screen came up blue.  These bars are the same trick, used as a ladder, so one
   boot answers "how far did it get" instead of only "did the first instruction run".
 
-  Each stage paints its own bar at its own offset and never touches another's, so
+  Every stage paints its own bar at its own offset and never touches another's, so
   the deepest bar visible is the furthest stage reached.  All of it sits inside the
   8 MiB BootShim filled, which is itself inside the map's "Display Reserved"
   0x9D400000 + 0x02400000.
+
+  From stage 4 the ladder is positional rather than counted: CheckpointDxe paints
+  every slot black at its own entry and recolours a slot only when the module that
+  owns it appears.  The screen therefore always shows the whole ladder, and the
+  first black band below the magenta one is the first module that never dispatched.
+  Reading it is "the first N bands are coloured, the rest are black" or, if a hole
+  opens in the middle, which band it is.
 
     stage  colour  offset from the splash base   painted from
     -----  ------  ----------------------------  ------------------------------
@@ -18,20 +25,23 @@
      1      green  +0x00040000                   MemoryMapLib, first call (PEI)
      2      yellow +0x00080000                   ConfigurationMapLib, first call (Sec)
      3      magenta +0x000C0000                  CheckpointDxe entry (DXE dispatch)
-     4      white  +0x00100000                   CheckpointDxe, GOP notification
-     5..13  cyan   +0x00140000 .. +0x00340000    one band per protocol that appears,
-                                                 256 KiB apart and all the same colour
-                                                 because the position is the message:
-                                                 CPU, watchdog, timer, RTC, variable
-                                                 write, block I/O, file system, BDS,
-                                                 USB
-     14..21 red    +0x00380000 .. +0x00540000    the Qualcomm dependency chain the
-                                                 vendor blobs wait on, read off the
-                                                 blobs' own depex sections: the DXE
-                                                 core's firmware-volume enumeration,
-                                                 RuntimeArch, SecurityArch, SMEM, the
-                                                 private GUID ten blobs share, ChipInfo,
-                                                 Clock, VariableArch
+     4..27  black  +0x00140000 .. +0x00700000    every slot, at that entry, and then
+            ->     256 KiB apart                 recoloured below
+     4..13  cyan   +0x00140000 .. +0x00380000    EDK II: the DXE core enumerating
+                                                 its firmware volumes, then Cpu,
+                                                 Runtime, Security, watchdog,
+                                                 variable write, variable read,
+                                                 monotonic counter, RTC, metronome
+     14..19  mixed +0x003C0000 .. +0x00500000    the Qualcomm chain in the order its
+            (red    red fan-in, then the cyan GIC
+     with         and timer, then red ChipInfo, SMEM and Clock -- the two ARM
+     two          drivers sit inside the vendor chain because the chain runs
+     cyan)      through them
+     20..24 cyan   +0x00540000 .. +0x00640000    BlockIo off SdccDxe, then DiskIo,
+                                                 partitions, file systems, collation
+     25     white   +0x00680000                  GraphicsOutput, the display
+     26     red     +0x006C0000                  PmicDxe, which is late in the volume
+     27     cyan    +0x00700000                  BdsDxe: the loop finished
 
   Round 10 read stages 0, 1 and 3 -- green and magenta, no white -- so SEC
   decompressed FVMAIN, PEI built the HOBs, DxeMain started and dispatched an
@@ -51,6 +61,13 @@
   then waits on SMEM, ChipInfo, Clock and eleven more, and SdccDxe (the eMMC that
   has to give UniXNU its BLOCK_IO) waits on Clock and the timer.  The red bands
   walk that chain in order.
+
+  Round 12 read three cyan, five red and no white, which is the reason for the
+  black pass: a count cannot say which bands, and the two readings that fit are
+  opposite.  Checking the INFs under Mu_Basecore removes half the ambiguity --
+  BdsDxe, VariableRuntimeDxe, DevicePathDxe and EmbeddedMonotonicCounter all have
+  Depex TRUE, so they cannot starve, and a dark band on any of them means the
+  dispatch loop stopped rather than ran out of things to run.
 
   Round 10's offsets were 1 MiB apart (green +0x100000, magenta +0x300000). The
   ladder was then dense enough to read but too coarse to fit nine protocols into
@@ -94,6 +111,11 @@
 #define CLOVER_COLOR_WHITE    0xFFFFFFFF
 #define CLOVER_COLOR_CYAN     0xFF00FFFF
 #define CLOVER_COLOR_RED      0xFFFF0000
+
+// The not-reached colour.  Black on the blue the BootShim filled is unmistakable,
+// and it is what lets a band be identified by where it sits instead of by what it
+// looks like: every slot is this colour until its module appears.
+#define CLOVER_COLOR_BLACK  0xFF000000
 
 //
 // Plain stores, because this runs from PEI (before the DXE memory services exist)

@@ -57,6 +57,15 @@ One consequence of that adjacency: `ramoops`/pstore wants `0x9FE00000` + `0x1000
 on this SoC, which is inside the firmware volume, so there is no usable panic
 region under UniXNU and a panic goes to the UART instead.
 
+The boot image is v0, not the v1 lavender declares: `boot` and `recovery` on this
+unit both have 0 in the header version slot, `page_size` 0x1000, and base-relative
+load offsets (kernel `0x8000`, ramdisk `0x1000000`, tags `0x100`) with the
+`0x80000000` left for the ABL to add.  Their kernel section is `Image.gz` with the
+device trees appended after the gzip stream — 111 concatenated DTBs in `boot`, one
+in `recovery`, selected by `qcom,msm-id`/`qcom,board-id` — which is the `append_dtb`
+shape, and neither image carries an AVB footer.  `check-clover-uefi.py` pins those
+numbers against `board.toml`.
+
 
 ## Setup
 
@@ -194,7 +203,7 @@ macOS Python 3.9.
 | Prebuilt blobs | extracted into `Binaries/clover` from the tablet's own xbl; gitignored, re-create with the extractor |
 | Board-id / DRAM / userdata / GIC | dumped and applied — `scripts/dump-clover-facts.sh` in the board repo, results under `facts/` |
 | Second DRAM bank | not described; `0x100000000 + 0x7E4C0000` needs a map row and a second `/chosen` window before XNU sees past 4 GiB |
-| Boot image packing | `header_version = 1` is unconfirmed: this stock boot header's address fields do not line up with the documented layout, so `[bootimg.image]` still carries placeholder offsets |
+| Boot image packing | header version 0, page 0x1000, kernel 0x8000 / ramdisk 0x1000000 / tags 0x100 — read off this unit's own `boot` and `recovery` headers, which agree, and pinned by the checker |
 | Real build | unverified — the overlay is complete and self-consistent, but no Mu-Silicium checkout has been assembled on this host yet |
 
 Flashing this firmware means writing a new `xbl` partition, the one the signed

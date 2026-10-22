@@ -45,6 +45,33 @@ FD_SIZE = 0x300000
 STACK_BASE = 0x9FF90000
 PANEL = (1200, 1920, 32)
 
+# The stock boot image's own header, read out of this unit's `boot` and `recovery`
+# partitions (facts/<serial>-<stamp>/img/unixnu-boot.img, unixnu-recovery.img --
+# the prefix is the dump script's naming, the bytes are the partitions).  Both
+# images agree on every value below, which is what makes them safe to treat as
+# what this ABL accepts rather than as one vendor's quirk:
+#
+#   header_version 0        the slot at 0x28 is zero in both, and a v0 header is
+#                           the shape the appended-DTB layout needs (no dtb slot)
+#   page_size 0x1000        proven independently by the section arithmetic: the
+#                           gzip kernel starts at 0x1000 and the ramdisk starts at
+#                           0x1000 + align(kernel_size, 0x1000)
+#   0x00008000 / 0x01000000 / 0x00000100 in the kernel_addr, ramdisk_addr and
+#                           tags_addr slots -- base-relative offsets, with the
+#                           0x80000000 base left out, which is why they look too
+#                           small to be physical addresses
+#
+# The kernel section is Image.gz with the device trees appended after the gzip
+# stream: 111 concatenated DTBs in `boot`, one in `recovery`.  That is the
+# append_dtb shape this board packs, and the ABL selects among them by
+# qcom,msm-id and qcom,board-id.  Neither image has an AVB footer or a non-zero
+# `id` field, so nothing in the boot image itself is signed on this variant.
+BOOT_HEADER_VERSION = 0
+BOOT_PAGE_SIZE = 0x1000
+BOOT_ADDRESSES = {"kernel_offset": 0x00008000,
+                  "ramdisk_offset": 0x01000000,
+                  "tags_offset": 0x00000100}
+
 # Mainline pins the video codec PIL region at 0x9cc00000 (sdm660-xiaomi-clover-
 # common.dtsi) while the downstream tree only takes it from a reusable CMA pool
 # in the low 512 MiB, so the UEFI map lets the DXE heap cover it and the ADT
@@ -230,12 +257,20 @@ def parse_memory_map(source: pathlib.Path):
             for m in ROW.finditer(source.read_text())]
 
 
-def board_firmware_defines(unixnu_arg=None) -> dict:
-    """[firmware.defines] of the UniXNU board repo, {} when it is not visible."""
-    unixnu = find_unixnu(unixnu_arg)
+def board_firmware_defines(unixnu_arg=None, problems: list = None) -> dict:
+    """[firmware.defines] of the UniXNU board repo, {} when it is not visible.
+
+    The fv group needs these to evaluate the !ifdef guards in DXE.inc, so a board
+    repository it cannot read is a problem, not a silent empty dict."""
+    unixnu = find_unixnu(unixnu_arg, problems)
     if unixnu is None:
         return {}
-    board = load_toml(unixnu / "board.toml") or {}
+    try:
+        board = load_toml(unixnu / "board.toml") or {}
+    except Exception as error:
+        if problems is not None:
+            problems.append(f"{unixnu}/board.toml did not parse: {error}")
+        return {}
     return board.get("firmware", {}).get("defines", {}) or {}
 
 
@@ -249,7 +284,7 @@ def check_group_fv(problems: list, warnings: list, args_unixnu=None):
     # firmware.py passes board.toml [firmware.defines] as -D on the EDK II command
     # line, and those are visible to !ifdef exactly like a [Defines] entry.  Merge
     # them here so the guards in DXE.inc can be evaluated offline.
-    for name, value in board_firmware_defines(args_unixnu).items():
+    for name, value in board_firmware_defines(args_unixnu, problems).items():
         defines.setdefault(name, str(value))
     externals = []
     included, guarded_out = expand_fv(fdf, defines, problems, externals)
@@ -538,12 +573,25 @@ def _toml_balanced(text: str) -> bool:
     return depth <= 0
 
 
-def find_unixnu(explicit: pathlib.Path):
+def find_unixnu(explicit: pathlib.Path, problems: list = None):
     """The board repository.  Two layouts are supported: beside this checkout, or
-    assembled as a UniXNU build tree that carries the overlay as its own board dir."""
-    candidates = [explicit] if explicit else []
-    candidates += [REPO.parent / "UniXNU-clover", REPO, pathlib.Path.cwd()]
-    for candidate in candidates:
+    assembled as a UniXNU build tree that carries the overlay as its own board dir.
+
+    An explicit --unixnu that does not look like the board repository is refused
+    rather than replaced by the automatic search; silently falling back made a
+    pointed-at-the-wrong-place run report the real repository as cross-checked."""
+    if explicit:
+        if (explicit / "board.toml").is_file() and (explicit / "scripts" /
+                "make-clover-adt.py").is_file():
+            return explicit
+        if problems is not None:
+            message = (f"{explicit} was named as the board repository but has no board.toml "
+                       "and scripts/make-clover-adt.py, so nothing was cross-checked "
+                       "against it")
+            if message not in problems:          # two groups ask, one complaint
+                problems.append(message)
+        return None
+    for candidate in [REPO.parent / "UniXNU-clover", REPO, pathlib.Path.cwd()]:
         if (candidate / "board.toml").is_file() and (candidate / "scripts" /
                 "make-clover-adt.py").is_file():
             return candidate
@@ -561,7 +609,13 @@ def check_adt(unixnu, map_rows, problems, warnings):
     except Exception as error:                        # a broken ADT tool is a hard stop
         problems.append(f"{script} could not be imported: {error}")
         return
-    hardware = getattr(module, "CLOVER_HARDWARE_SPEC", {})
+    hardware = getattr(module, "CLOVER_HARDWARE_SPEC", None)
+    if not isinstance(hardware, dict) or "framebuffer" not in hardware:
+        # An empty or restructured ADT tool imports cleanly and then has nothing to
+        # say, which would otherwise surface as a formatting crash below.
+        problems.append(f"{script} imported but carries no CLOVER_HARDWARE_SPEC framebuffer "
+                        "spec, so the UEFI map has nothing to be compared against")
+        return
     frame = hardware.get("framebuffer", {})
     if (frame.get("base"), frame.get("window_size")) != (SPLASH_BASE, SPLASH_SIZE):
         problems.append(f"ADT framebuffer is {frame.get('base'):x}+{frame.get('window_size'):x}, "
@@ -633,12 +687,14 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
     image = toml.get("boot_image", {})
     shim = toml.get("boot_shim", {})
     kernel = toml.get("boot_image_kernel", {})
-    if str(image.get("header_version")) != "1":
-        problems.append("clover.toml [boot_image] header_version must be 1 for this "
-                        "board's fastboot")
+    if str(image.get("header_version")) != str(BOOT_HEADER_VERSION):
+        problems.append(f"clover.toml [boot_image] header_version is {image.get('header_version')}; "
+                        f"both boot and recovery on this unit carry header version "
+                        f"{BOOT_HEADER_VERSION}")
     if not shim.get("requires_kernel_header"):
         problems.append("clover.toml [boot_shim] requires_kernel_header must be true: "
-                        "mkbootimg writes a v1 header, so BootShim.S has to skip it")
+                        "mkbootimg writes the image header ahead of the kernel, so "
+                        "BootShim.S has to skip it")
     if kernel.get("append_dtb") and not (REPO / "Resources" / "DTBs" / "clover.dtb").is_file():
         # Only the standalone `build_uefi.py -d clover` path reads this; the UniXNU
         # path never calls build_uefi.py and packs its own Apple device tree.  A
@@ -652,9 +708,10 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
             "-I include -undef -D__DTS__ -x assembler-with-cpp "
             "arch/arm64/boot/dts/qcom/sdm660-xiaomi-clover.dts)`")
 
-    unixnu = find_unixnu(unixnu_arg)
+    unixnu = find_unixnu(unixnu_arg, problems)
     if unixnu is None:
-        note("-", "UniXNU-clover not found; use --unixnu to cross-check board.toml")
+        if unixnu_arg is None:
+            note("-", "UniXNU-clover not found; use --unixnu to cross-check board.toml")
         return
     try:
         board = load_toml(unixnu / "board.toml")
@@ -684,6 +741,23 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
     if image_board.get("header_version") != image.get("header_version"):
         problems.append(f"header version disagrees: board.toml {image_board.get('header_version')} "
                         f"vs clover.toml {image.get('header_version')}")
+    def number(value):
+        return int(value, 0) if isinstance(value, str) else int(value)
+
+    if number(image_board.get("pagesize", 0)) != BOOT_PAGE_SIZE:
+        problems.append(f"board.toml [bootimg.image] pagesize is {image_board.get('pagesize')}; "
+                        f"the stock images set page_size to {BOOT_PAGE_SIZE:#x}")
+    for key, want in BOOT_ADDRESSES.items():
+        got = image_board.get(key)
+        if got is None:
+            problems.append(f"board.toml [bootimg.image] has no {key}")
+        elif number(got) != want:
+            problems.append(f"board.toml [bootimg.image] {key} is {number(got):#x}, but the header "
+                            f"of this unit's own boot and recovery images says {want:#x}")
+    if number(image_board.get("base", 0)) != 0:
+        problems.append("board.toml [bootimg.image] base must stay 0: the stock headers keep the "
+                        "0x80000000 DRAM base out of the kernel_addr, ramdisk_addr and tags_addr "
+                        "slots, and adding it here would double it against what the ABL applies")
     dtb_nodes = board.get("bootimg", {}).get("dtb_node", [])
     splash_row = map_rows.get("Display Reserved") if map_rows else None
     quoted = re.findall(r"0x[0-9a-fA-F]+", str(dtb_nodes))

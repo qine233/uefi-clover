@@ -35,11 +35,17 @@ append_dtb         = true
 #
 # Android Boot Image Configs
 #
-# header_version 1 is what the SDM660 generation of Xiaomi devices accepts, and it is what
-# lavender declares for the same SoC. facts/<serial>-<stamp>/img/unixnu-boot.img is the
-# unit's own boot partition and does carry a v1-sized header with the product name field
-# empty, but its address and size fields do not line up with the documented layout, so the
-# version is still unconfirmed -- check it against a known mkbootimg image before flashing,
-# the way gta4l's newer SM6115 needs version 2.
+# Read off this unit, not inferred from lavender: facts/<serial>-<stamp>/img/
+# unixnu-boot.img and unixnu-recovery.img are the device's own boot and recovery
+# partitions, and both have 0 in the header_version slot -- version 0, the
+# generation before the v1 header_size and dtb fields.  Their kernel sections are
+# Image.gz with device trees appended straight after the gzip stream (111 in
+# boot, 1 in recovery), which is exactly the append_dtb shape above, and neither
+# image carries an AVB footer.  Lavender declares version 1 for the same SoC, but
+# this ABL is holding these two v0 images and boots them.
+#
+# The load fields hold base-relative offsets (kernel 0x8000, ramdisk 0x1000000,
+# tags 0x100) with the 0x80000000 left to the bootloader; board.toml's
+# [bootimg.image] carries those numbers and the checker pins them here.
 [boot_image]
-header_version = 1
+header_version = 0

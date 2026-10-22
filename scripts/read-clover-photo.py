@@ -2,10 +2,11 @@
 """Read the clover checkpoint ladder out of a photograph of the tablet screen.
 
 The only output channel this unit has is the panel, and since round 13 the ladder is
-positional: CheckpointDxe paints every protocol slot black at its own entry and
-recolours a slot when the module that owns it appears.  What a boot answers is "which is
-the first dark band", and twenty-seven bands cannot be described aloud, so the reading
-comes from a photo.
+positional: CheckpointDxe paints every band black at its own entry and recolours a slot
+when the protocol it names exists.  What a boot answers is "which is the first dark
+band", and since round 14 there is a second reading below the slots -- seven yellow bands
+carrying the firmware volume file index of the last image the DXE core loaded.  Neither
+is something that can be described aloud, so the reading comes from a photo.
 
   1. the frame is resampled and every row given a majority colour.  Bright runs are the
      lit bands.  An empty slot keeps the black the entry point painted, which in a photo
@@ -18,11 +19,14 @@ comes from a photo.
      module.  The green and magenta stages fix two anchors, and what is left is searched:
      the fit kept is the one that puts the detected bands on slot centres and makes their
      colours agree with the driver's own table.
+  3. the seven index bands are then sampled at the rows the fit predicts for them and
+     decoded most-sign-bit-first, with the run detection printed alongside as a check.
 
-The slot table is parsed from CheckpointDxe.c, so the script cannot drift out of sync
-with the firmware.
+Both tables are parsed from CheckpointDxe.c, so the script cannot drift out of sync with
+the firmware.
 
-Usage:  scripts/read-clover-photo.py /path/to/photo.jpeg [--width 600] [--debug]
+Usage:  scripts/read-clover-photo.py /path/to/photo.jpeg [--width 600]
+        [--modules fv-order.txt] [--debug]
 """
 
 import argparse
@@ -119,6 +123,27 @@ def slots(path):
     return out
 
 
+def bits(path):
+    """Parse the index bit table: { 0xoffset, N }.  Each row is one bit of the last
+    loaded image's firmware volume file index, painted yellow when set and left black
+    when clear, so it can be read as a colour like every other band."""
+    out = []
+    for m in re.finditer(r"\{\s*(0x[0-9a-fA-F]+)\s*,\s*(\d+)\s*\}",
+                         path.read_text(encoding="utf-8")):
+        out.append({"off": int(m.group(1), 16), "bit": int(m.group(2))})
+    return out
+
+
+def modules(path):
+    """Index to module name, from the text scripts/fv-order.py prints."""
+    out = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].startswith("0x"):
+            out[int(parts[0])] = parts[-1]
+    return out
+
+
 def ranges(rowcls, keep):
     out, y, h = [], 0, len(rowcls)
     while y < h:
@@ -137,10 +162,23 @@ def main():
     ap.add_argument("photo")
     ap.add_argument("--width", type=int, default=600)
     ap.add_argument("--driver", default=str(DRIVER))
+    ap.add_argument("--modules", help="text file of scripts/fv-order.py output, to name the "
+                                      "index the bit bands decode to")
     ap.add_argument("--debug", action="store_true")
     a = ap.parse_args()
 
     table = slots(Path(a.driver))
+    bitrows = bits(Path(a.driver))
+    nslots = len(table)
+    # The index bands continue the same slot numbering: the pitch is constant, so an
+    # offset is a slot number by arithmetic.  Giving them rows here lets the fit below
+    # use a lit index bit as evidence for its geometry exactly as it uses a lit protocol
+    # slot, and a clear bit (black) is simply a row no run was detected on, which costs
+    # the score nothing.
+    for row in bitrows:
+        table.append({"guid": None, "off": row["off"], "want": "yellow",
+                      "name": "index bit %d, value %d" % (row["bit"], 1 << row["bit"])})
+
     grid, h, w = load(Path(a.photo), a.width)
     # Only the middle of the frame: the bezel, the desk and the Android footer are not
     # part of the ladder.
@@ -216,7 +254,7 @@ def main():
 
     print("\n%-11s %-7s %-10s %s" % ("offset", "expect", "state", "meaning"))
     dark = []
-    for i, s in enumerate(table):
+    for i, s in enumerate(table[:nslots]):
         got = lit.get(i)
         state = "dark" if not got else ("LIT" if got == s["want"] else "WRONG(%s)" % got)
         if not got:
@@ -226,9 +264,42 @@ def main():
     if dark:
         print("\nfirst dark slot: index %d at %#011x  %s" % dark[0])
         if lit:
-            print("deepest lit slot: index %d" % max(lit))
+            print("deepest lit slot: index %d" % max(i for i in lit if i < nslots))
     else:
         print("\nevery slot lit")
+
+    if bitrows:
+        # Sample each band at the row the fit predicts for its offset and decide it on
+        # the spot: a bit is a one-of-two question (yellow or not), so this does not
+        # need the run detection to have found it, and the two readings printed side by
+        # side show which one the frame is actually supporting.
+        b = (ym - yg) * (1.0 - 2.0 * k) / 2.0
+        print("\n%-11s %-5s %-9s %-6s %s" % ("offset", "bit", "sample", "value", "check"))
+        index = 0
+        for j, row in enumerate(bitrows):
+            i = nslots + j
+            u = (i + SLOT_ZERO_ABOVE_GREEN - shift) / scale
+            y = int(round(yg + b * u / (1.0 - k * u))) if (1.0 - k * u) > 0 else -1
+            votes = {}
+            for yy in range(max(0, y - 3), min(h, y + 4)):
+                c = rowcls[yy]
+                if c not in ("mixed", "background", "blue"):
+                    votes[c] = votes.get(c, 0) + 1
+            seen = max(votes, key=votes.get) if votes else "nothing"
+            val = 1 if seen == "yellow" else 0
+            det = 1 if lit.get(i) == "yellow" else 0
+            index += val << row["bit"]
+            print("%#011x bit %-3s %-9s %-6d %s" %
+                  (row["off"], row["bit"], seen, val,
+                   "" if val == det else "run detection says %d" % det))
+        named = modules(Path(a.modules)) if a.modules else {}
+        if index == 0:
+            print("\nlast image loaded: none since CheckpointDxe, or its file was not in "
+                  "the list built at entry")
+        else:
+            print("\nlast image loaded: FVMAIN file %d  %s" %
+                  (index, named.get(index, "(run scripts/fv-order.py and pass --modules)")))
+
     if a.debug:
         peak = max(blueness)
         dips = [(lo, hi) for _c, lo, hi in ranges(

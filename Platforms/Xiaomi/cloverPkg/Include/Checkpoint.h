@@ -13,11 +13,12 @@
   0x9D400000 + 0x02400000.
 
   From stage 4 the ladder is positional rather than counted: CheckpointDxe paints
-  every slot black at its own entry and recolours a slot only when the module that
-  owns it appears.  The screen therefore always shows the whole ladder, and the
-  first black band below the magenta one is the first module that never dispatched.
-  Reading it is "the first N bands are coloured, the rest are black" or, if a hole
-  opens in the middle, which band it is.
+  every slot black at its own entry, recolours a slot when the protocol it names
+  exists, and leaves black what the boot never produced.  The screen therefore always
+  shows the whole ladder, and a band identifies itself by where it sits.  Below the
+  slots the seven yellow bands are not stages at all but a number: the FVMAIN file
+  index of the last driver the DXE core loaded, bit 6 topmost, so the module that
+  hangs names itself.
 
     stage  colour  offset from the splash base   painted from
     -----  ------  ----------------------------  ------------------------------
@@ -25,53 +26,56 @@
      1      green  +0x00040000                   MemoryMapLib, first call (PEI)
      2      yellow +0x00080000                   ConfigurationMapLib, first call (Sec)
      3      magenta +0x000C0000                  CheckpointDxe entry (DXE dispatch)
-     4..27  black  +0x00140000 .. +0x00700000    every slot, at that entry, and then
-            ->     256 KiB apart                 recoloured below
-     4..13  cyan   +0x00140000 .. +0x00380000    EDK II: the DXE core enumerating
-                                                 its firmware volumes, then Cpu,
-                                                 Runtime, Security, watchdog,
-                                                 variable write, variable read,
-                                                 monotonic counter, RTC, metronome
-     14..19  mixed +0x003C0000 .. +0x00500000    the Qualcomm chain in the order its
-            (red    red fan-in, then the cyan GIC
-     with         and timer, then red ChipInfo, SMEM and Clock -- the two ARM
-     two          drivers sit inside the vendor chain because the chain runs
-     cyan)      through them
-     20..24 cyan   +0x00540000 .. +0x00640000    BlockIo off SdccDxe, then DiskIo,
-                                                 partitions, file systems, collation
-     25     white   +0x00680000                  GraphicsOutput, the display
-     26     red     +0x006C0000                  PmicDxe, which is late in the volume
-     27     cyan    +0x00700000                  BdsDxe: the loop finished
+     4..19  black  +0x00140000 .. +0x00500000    every protocol slot, at that entry,
+            ->     256 KiB apart                 and then recoloured below
+     4..19  mixed  +0x00140000 .. +0x00500000    sixteen slots in the order the DXE
+            (cyan  core reaches them: FV2 and FVB, which it publishes itself; the
+             with   CPU arch protocol; VariableRuntimeDxe twice (write, then
+             red    readable); RTC; the vendor fan-in GUID; the GIC and the ARM
+             ones)  timer inside the Qualcomm chain; then red ChipInfo, SMEM and
+                   Clock; then BlockIo off the eMMC host, partitions, and at the
+                   end GraphicsOutput and BdsDxe
+    20..26  yellow +0x00540000 .. +0x006C0000    the seven bits of the last loaded
+            ->black                             image's file index, high bit first
+
+  Rounds 9 through 13 are the reason the table is this shape, and each of the three
+  parts answers a reading that came back ambiguous.
 
   Round 10 read stages 0, 1 and 3 -- green and magenta, no white -- so SEC
   decompressed FVMAIN, PEI built the HOBs, DxeMain started and dispatched an
   ordinary driver, and the stop is somewhere in the DXE dispatch after that.
-  Stages 5..13 exist to say where.
 
-  Round 11 read green, magenta and three evenly spaced cyan bands and no white,
-  which puts the stop in the same gap. The red stages exist because that gap is
-  not one step: parsing the depex sections under Binaries/clover (opcode 0x02
-  pushes a GUID, 0x03 ANDs, 0x06 TRUE, 0x08 ends the expression) shows the vendor
-  blobs are chained, not parallel.  EnvDxe and SmemDxe wait on nothing; DALSYSDxe
-  waits on SMEM; and ChipInfoDxe, ClockDxe, HWIODxe, I2CDxe, SPIDxe,
-  PlatformInfoDxe, PmicDxe, AdcDxe, TsensDxe and TLMMDxe all wait on
-  {0xAE37B942,0x457F,0x4C91,{0xA1,0x96,0xD9,0x66,0x9F,0xD3,0x47,0xA3}}, a GUID no
-  header in this tree declares -- so it is produced by a blob, and if that blob
-  does not run, ten of the thirty-five never even become schedulable.  DisplayDxe
-  then waits on SMEM, ChipInfo, Clock and eleven more, and SdccDxe (the eMMC that
-  has to give UniXNU its BLOCK_IO) waits on Clock and the timer.  The red bands
-  walk that chain in order.
+  Round 11 read three evenly spaced cyan bands and round 12 read three cyan and five
+  red, both with no white.  A count identifies no band, and the two shapes that fit
+  said opposite things, so round 13 added the black pass.  Checking the INFs under
+  Mu_Basecore settles what those two readings could not: BdsDxe, VariableRuntimeDxe,
+  DevicePathDxe and EmbeddedMonotonicCounter all have Depex TRUE, so they cannot be
+  starved, and a dark band on one of them means the dispatch loop stopped rather than
+  ran out of things to run.  Round 13's photograph said exactly that -- the last
+  producer band lit was SMEM (file 30 of FVMAIN) and Clock (38) was the first dark one
+  under it, with BdsDxe (64) dark too -- and it exposed two flaws in the instrument
+  itself, which are what stages 4..26 now exist to fix.
 
-  Round 12 read three cyan, five red and no white, which is the reason for the
-  black pass: a count cannot say which bands, and the two readings that fit are
-  opposite.  Checking the INFs under Mu_Basecore removes half the ambiguity --
-  BdsDxe, VariableRuntimeDxe, DevicePathDxe and EmbeddedMonotonicCounter all have
-  Depex TRUE, so they cannot starve, and a dark band on any of them means the
-  dispatch loop stopped rather than ran out of things to run.
+  The first is that CoreRegisterProtocolNotify does not report interfaces that already
+  exist; it only appends a notification record (MdeModulePkg/Core/Dxe/Hand/Notify.c:
+  139), and a protocol installed before this driver ran keeps its band dark.  DxeCore
+  publishes FirmwareVolume2 and FirmwareVolumeBlock from the HOBs long before APRIORI,
+  so round 13's dark volume band meant nothing, and the driver now drains every
+  registration by hand at entry.  An FVB slot was added because that is the protocol a
+  variable store needs and DxeCore derives FV2 from it (FwVol.c:622), so the two bands
+  together say whether any volume was readable.
+
+  The second is that a set of dark bands still names no module.  The DXE core calls
+  CoreLoadImage for a driver the moment it reaches the head of the scheduled queue and
+  CoreStartImage only afterwards (Dispatcher.c:456 and :520), so the last image loaded
+  is the module the loop was working on -- and a notification event at TPL_NOTIFY runs
+  while that load is still in progress, because an event fires on the first TPL
+  lowering below its own level (Event/Tpl.c:120-133) and the install queues it
+  (Hand/Notify.c:32).  Hence seven bands rather than a taller ladder.
 
   Round 10's offsets were 1 MiB apart (green +0x100000, magenta +0x300000). The
-  ladder was then dense enough to read but too coarse to fit nine protocols into
-  the BootShim fill, so the whole table moved to a 256 KiB stride; the ordering
+  ladder was then dense enough to read but too coarse to fit the slots into the
+  BootShim fill, so the whole table moved to a 256 KiB stride; the ordering
   top-to-bottom is unchanged, only the spacing.
 
   A screen with no bars at all but a real UEFI image is the best result: it means

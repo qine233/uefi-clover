@@ -28,8 +28,20 @@ size = 0x300000
 #
 # Android Boot Image Kernel Configs
 #
+# "none", deliberately, even though lavender says "gzip".  gzip here means the
+# whole BootShim + FD is *replaced by a bare gzip stream*, so the first bytes the
+# bootloader jumps to are 0x1f 0x8b -- that only works on an ABL that gunzips the
+# boot image before entering it.  BootShim itself does no decompression (it copies
+# FD_SIZE bytes to FD_BASE and branches), and this unit's own kernel sections are
+# arm64 Image.gz-with-stub, which begin with executable code and decompress
+# themselves -- so its 2018 header-v0 ABL has never needed gunzip support, and the
+# two on-device attempts (frozen splash on a cold boot, straight back to fastboot
+# from "fastboot boot") are what jumping into a gzip stream looks like.  The raw
+# payload is 3 486 671 bytes against a 64 MiB partition and a 512 MiB
+# download-buffer limit, so nothing here needs the compression.
+#
 [boot_image_kernel]
-kernel_compression = "gzip"
+kernel_compression = "none"
 append_dtb         = true
 
 #

@@ -115,6 +115,6 @@ GetMemoryMap (
   // is PEI building the resource HOBs, so a green bar here means we got out of SEC.
   // Later callers (MemoryMapHelperLib from DXE) hit the same guard and leave it.
   if (mCalls++ == 0) {
-    CloverCheckpointBar (0x00100000, CLOVER_COLOR_GREEN);
+    CloverCheckpointBar (0x00040000, CLOVER_COLOR_GREEN);
   }
 }

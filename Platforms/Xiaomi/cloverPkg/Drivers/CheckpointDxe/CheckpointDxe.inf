@@ -1,9 +1,15 @@
 ##
 #  clover: the DXE-dispatch checkpoint driver.
 #
-#  Draws the stage-3 and stage-4 bars described in Include/Checkpoint.h.  It links
-#  nothing of the platform's and depends on nothing, so it is dispatched even when
-#  the vendor blobs behind it are not; that is the point of having it in APRIORI.
+#  Draws the stage-3 band at its own entry and then records the rest of the DXE
+#  phase: one cyan band per architecture/core protocol that appears, at an offset
+#  that names it (Include/Checkpoint.h).  It links nothing of the platform's and
+#  depends on nothing, so it is dispatched even when the vendor blobs behind it
+#  are not; that is the point of having it in APRIORI.
+#
+#  The [Protocols] list is only a declaration of what it notifies on.  A band
+#  still appears for a protocol produced before this driver ran, because
+#  RegisterProtocolNotify reports pre-existing instances.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
@@ -27,7 +33,16 @@
   UefiBootServicesTableLib
 
 [Protocols]
-  gEfiGraphicsOutputProtocolGuid ## CONSUMES
+  gEfiGraphicsOutputProtocolGuid   ## CONSUMES
+  gEfiCpuArchProtocolGuid          ## CONSUMES
+  gEfiWatchdogTimerArchProtocolGuid ## CONSUMES
+  gEfiTimerArchProtocolGuid        ## CONSUMES
+  gEfiRealTimeClockArchProtocolGuid ## CONSUMES
+  gEfiVariableWriteArchProtocolGuid ## CONSUMES
+  gEfiBlockIoProtocolGuid          ## CONSUMES
+  gEfiSimpleFileSystemProtocolGuid ## CONSUMES
+  gEfiBdsArchProtocolGuid          ## CONSUMES
+  gEfiUsbIoProtocolGuid            ## CONSUMES
 
 [Depex]
   TRUE

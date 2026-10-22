@@ -765,9 +765,15 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
         for path in sorted((REPO / "Platforms" / "Xiaomi" / "cloverPkg").rglob("*")):
             if path.suffix not in {".c", ".h"} or path == ladder:
                 continue
-            for offset in re.findall(r"CloverCheckpointBar\s*\(\s*(0x[0-9a-fA-F]+)",
-                                     path.read_text(errors="ignore")):
-                stages.setdefault(int(offset, 0), path.name)
+            text = path.read_text(errors="ignore")
+            # A call site names its own offset; CheckpointDxe's protocol table does
+            # not, it stores the offset in a row and passes it later, so scan for
+            # both shapes. A table row the checker cannot see is a band nobody
+            # validated.
+            found = re.findall(r"CloverCheckpointBar\s*\(\s*(0x[0-9a-fA-F]+)", text)
+            found += re.findall(r"\{\s*&gEfi\w+,\s*(0x[0-9a-fA-F]+)\s*,", text)
+            for offset in found:
+                stages.setdefault(int(offset, 0), []).append(path.name)
         row = map_rows.get("Display Reserved") if map_rows else None
         if cbase is None or csize is None:
             problems.append("Include/Checkpoint.h must keep its #define CLOVER_SPLASH_BASE "
@@ -792,10 +798,19 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
                                       probe.read_text())
                     if match:
                         filled = int(match.group(1), 0)
-                outside = [f"{offset:#x} in {name}" for offset, name in sorted(stages.items())
-                           if offset + size > row[1]]
-                unfilled = [f"{offset:#x} in {name}" for offset, name in sorted(stages.items())
-                            if offset + size > filled]
+                offsets = sorted(stages)
+                outside = [f"{offset:#x} in {', '.join(stages[offset])}"
+                           for offset in offsets if offset + size > row[1]]
+                unfilled = [f"{offset:#x} in {', '.join(stages[offset])}"
+                            for offset in offsets if offset + size > filled]
+                # Two bands within one bar length of each other paint over one
+                # another, and the deeper stage stops meaning anything: this is the
+                # one way the ladder can silently lose its reading.
+                clash = [f"{offsets[i]:#x} and {offsets[i + 1]:#x}"
+                         for i in range(len(offsets) - 1)
+                         if offsets[i + 1] - offsets[i] < size]
+                dupes = [f"{offset:#x} by {', '.join(names)}"
+                         for offset, names in sorted(stages.items()) if len(names) > 1]
                 if outside:
                     problems.append("checkpoint bar runs past 'Display Reserved': "
                                     + ", ".join(outside))
@@ -803,10 +818,20 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
                     problems.append(f"checkpoint bar sits outside the {filled:#x} BootShim "
                                     "filled, so its visibility depends on ABL's logo and not "
                                     "on the code: " + ", ".join(unfilled))
+                elif dupes:
+                    problems.append("two stages paint the same slot, so one of them will "
+                                    "never be visible: " + ", ".join(dupes))
+                elif clash:
+                    problems.append("checkpoint bars overlap (" + ", ".join(clash)
+                                    + f"), closer than the {size:#x} bar size; the screen "
+                                    "would show a merged band and the order could not be read")
                 else:
-                    note("*", f"checkpoint ladder has {len(stages)} bars at "
-                              + ", ".join(f"{offset:#x}" for offset in sorted(stages))
-                              + f", each {size:#x} bytes, all inside the BootShim fill")
+                    pitch = (min(offsets[i + 1] - offsets[i] for i in range(len(offsets) - 1))
+                             if len(offsets) > 1 else 0)
+                    note("*", f"checkpoint ladder has {len(offsets)} bars at "
+                              + ", ".join(f"{offset:#x}" for offset in offsets)
+                              + f", each {size:#x} bytes, {pitch:#x} apart at the tightest, "
+                              "all inside the BootShim fill")
         apriori = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "Include" / "APRIORI.inc"
         dxe = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "Include" / "DXE.inc"
         if stages and apriori.is_file() and dxe.is_file():

@@ -14,11 +14,27 @@
 
     stage  colour  offset from the splash base   painted from
     -----  ------  ----------------------------  ------------------------------
-     0      blue   whole 8 MiB                   BootShim (before the FD)
-     1      green  +0x00100000                   MemoryMapLib, first call (PEI)
-     2      yellow +0x00200000                   ConfigurationMapLib, first call
-     3      magenta +0x00300000                  CheckpointDxe entry (DXE dispatch)
-     4      white  +0x00400000                   CheckpointDxe, GOP notification
+     0      blue   whole framebuffer             BootShim (before the FD)
+     1      green  +0x00040000                   MemoryMapLib, first call (PEI)
+     2      yellow +0x00080000                   ConfigurationMapLib, first call (Sec)
+     3      magenta +0x000C0000                  CheckpointDxe entry (DXE dispatch)
+     4      white  +0x00100000                   CheckpointDxe, GOP notification
+     5..13  cyan   +0x00140000 .. +0x00340000    one band per protocol that appears,
+                                                 256 KiB apart and all the same colour
+                                                 because the position is the message:
+                                                 CPU, watchdog, timer, RTC, variable
+                                                 write, block I/O, file system, BDS,
+                                                 USB
+
+  Round 10 read stages 0, 1 and 3 -- green and magenta, no white -- so SEC
+  decompressed FVMAIN, PEI built the HOBs, DxeMain started and dispatched an
+  ordinary driver, and the stop is somewhere in the DXE dispatch after that.
+  Stages 5..13 exist to say where.
+
+  Round 10's offsets were 1 MiB apart (green +0x100000, magenta +0x300000). The
+  ladder was then dense enough to read but too coarse to fit nine protocols into
+  the BootShim fill, so the whole table moved to a 256 KiB stride; the ordering
+  top-to-bottom is unchanged, only the spacing.
 
   A screen with no bars at all but a real UEFI image is the best result: it means
   the vendor display path took the panel over.
@@ -40,14 +56,16 @@
 // scripts/check-clover-uefi.py fails the build if this and that row diverge.
 #define CLOVER_SPLASH_BASE  0x9D400000
 
-// 256 KiB: about 21 rows at a 1200-pixel stride, about 34 at 1920, so the bar is
-// unmistakable whichever way round ABL left the panel.
-#define CLOVER_BAR_SIZE  0x00040000
+// 128 KiB: about 27 rows at a 1200-pixel stride, about 17 at 1920. Round 10's
+// 256 KiB bars were unmistakable, but at a 256 KiB pitch they would touch, and
+// thirteen bands have to share the 8 MiB BootShim filled.
+#define CLOVER_BAR_SIZE  0x00020000
 
 #define CLOVER_COLOR_GREEN    0xFF00FF00
 #define CLOVER_COLOR_YELLOW   0xFFFFFF00
 #define CLOVER_COLOR_MAGENTA  0xFFFF00FF
 #define CLOVER_COLOR_WHITE    0xFFFFFFFF
+#define CLOVER_COLOR_CYAN     0xFF00FFFF
 
 //
 // Plain stores, because this runs from PEI (before the DXE memory services exist)

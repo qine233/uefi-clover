@@ -689,10 +689,22 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
         problems.append(f"clover.toml [boot_image] header_version is {image.get('header_version')}; "
                         f"both boot and recovery on this unit carry header version "
                         f"{BOOT_HEADER_VERSION}")
-    if not shim.get("requires_kernel_header"):
-        problems.append("clover.toml [boot_shim] requires_kernel_header must be true: "
-                        "mkbootimg writes the image header ahead of the kernel, so "
-                        "BootShim.S has to skip it")
+    # BootShim.S emits an arm64 Linux image header between its _Head branch and
+    # _Start, i.e. at blob offsets 8..63: text_offset = FD_BASE, image_size = FD_SIZE,
+    # "ARM\x64" at 56.  mkbootimg never writes that header -- the boot image header it
+    # does write lives in the image's first page, outside the kernel blob -- so the
+    # flag only decides whether the loader is invited to parse those fields.  An
+    # uncompressed payload leaves the magic live, and text_offset = 0x9fc00000 is not a
+    # value the arm64 boot protocol permits (it wants a small, page-aligned offset), so
+    # a strict loader may reject the image or trust the size it was handed.  Not a
+    # hard error: round 5 was exactly this pair and froze at the Mi logo, which is what
+    # the gzip builds did too, so the mechanism is inferred, never measured.
+    if bool(shim.get("requires_kernel_header")) and str(kernel.get("kernel_compression")) == "none":
+        warnings.append("clover.toml asks BootShim for the arm64 image header and for an "
+                        "uncompressed payload together: the loader then sees a live "
+                        "ARM\\x64 magic whose text_offset is FD_BASE, illegal per the arm64 "
+                        "boot protocol.  Keep the payload compressed, or set "
+                        "requires_kernel_header = false")
     if kernel.get("append_dtb") and not (REPO / "Resources" / "DTBs" / "clover.dtb").is_file():
         # Only the standalone `build_uefi.py -d clover` path reads this; the UniXNU
         # path never calls build_uefi.py and packs its own Apple device tree.  A

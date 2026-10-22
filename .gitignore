@@ -1,0 +1,29 @@
+# This repository is an overlay: it holds sources that are copied into a
+# Mu-Silicium checkout, and nothing that a checkout produces.
+
+# Accidental in-place builds, if anyone runs stuart from here
+/Build/
+/build/
+*.log
+
+# The tablet's own firmware. Binaries/clover must never be committed: the blob
+# set comes from a device nobody else owns, its provenance is the dump in
+# UniXNU-clover/facts/, and proprietary-files.txt is the reviewable contract.
+/Binaries/
+*.efi
+*.depex
+*.fd
+*.img
+*.mbn
+*.dtb
+*.dtbo
+
+# Local development files
+__pycache__/
+*.pyc
+.DS_Store
+.vscode/
+.idea/
+*~
+*.swp
+.env

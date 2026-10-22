@@ -1,0 +1,41 @@
+# Mu-Silicium device configuration for the Xiaomi Mi Pad 4 8" LTE (clover, SDM660).
+#
+# Derived from Resources/Configs/lavender.toml, the Redmi Note 7: the same SDM660 SoC, the
+# same StarlordPkg silicon package, the same 3 GiB-or-less low DRAM bank at 0x80000000, and a
+# firmware volume that gta4l (SM6115, also eMMC) proves fits in 3 MiB with UniXNU and
+# DarwinBoot embedded. Values marked TODO-DEVICE must be confirmed against the tablet before
+# an image is flashed.
+
+#
+# Boot Shim Configs
+#
+[boot_shim]
+requires_kernel_header = true
+
+#
+# UEFI FD Configs
+#
+# The firmware volume occupies 0x9FC00000-0x9FF00000. The clover splash region moves to
+# 0x9d500000 + 0x02400000 and ends at 0x9F900000, two MiB below, so the two do not touch.
+# This is the arrangement MemoryMapLib implements; keep both files in step.
+#
+[uefi_fd]
+base = 0x9FC00000
+size = 0x300000
+
+#
+# Android Boot Image Kernel Configs
+#
+[boot_image_kernel]
+kernel_compression = "gzip"
+append_dtb         = true
+
+#
+# Android Boot Image Configs
+#
+# header_version 1 is what the SDM660 generation of Xiaomi devices accepts, and it is what
+# lavender declares for the same SoC. TODO-DEVICE: read the header of the unit's own boot or
+# recovery image (scripts/dump-clover-facts.sh writes it to facts/) and confirm that the ABL
+# of this variant does not require version 2, as gta4l's newer SM6115 does.
+[boot_image]
+header_version = 1

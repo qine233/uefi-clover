@@ -1,0 +1,250 @@
+#
+# clover firmware blobs: everything the firmware volume needs that is not in
+# this repository.
+#
+# Why this file exists
+# --------------------
+# Mu-Silicium gets its prebuilt Qualcomm DXE drivers from the
+# Project-Silicium/Device-Binaries submodule, laid out as Binaries/<device>/.
+# That submodule ships 75 device directories and clover is not one of them:
+# the closest entry is lavender (Redmi Note 7, also SDM660) and the tablet's own
+# firmware has never been dumped into it.  Verified against the tree of
+# Project-Silicium/Device-Binaries@main, whose top level is:
+#
+#   9707f a52q a52sxq alioth aston b4q b5q bale_b beryllium bitra caprip
+#   caymanslm cebu cepheus cheeseburger citrus dm2q dodge enchilada equuleus
+#   fog garnet generic ginkgo giulia gta4l gta9pwifi gts8p gts9wifi i005d
+#   infiniti ingres j706f kebab laurel_sprout lavender lemonade lime lisa
+#   macan marble mh2 miatoll muyu nabu nitrogen nuwa nx729j onyx pagani
+#   peridot phoenix pipa polaris pong q2q qrd8550 r0q r8q r9qb2 renoir salami
+#   senna_a senna_bc spacewar spes starqltechn surya sweet_k6a tapas vayu
+#   venus veux vili willow
+#
+# So `Binaries/clover` has to be produced locally, from the tablet's own stock
+# firmware, before clover.dsc can build.  Nothing in this overlay is a stub or a
+# placeholder: every module listed below is a real DXE driver that upstream
+# extracts for lavender, with the same directory and file names.
+#
+# Line format
+# -----------
+#   <marker> <path>
+#
+#   path     relative to the root of a Mu-Silicium checkout (that is also where
+#            the `Binaries/` submodule is mounted).
+#   R        required: clover.dsc/clover.fdf will not build without it
+#   O        optional: read at runtime by a prebuilt driver, absent means a
+#            degraded but bootable firmware
+#   P        provided: already present in the submodule (Binaries/generic), no
+#            extraction needed
+#
+# Everything after a "#" is a comment, blank lines are ignored.
+# scripts/check-clover-uefi.py reads this manifest, cross-checks it against the
+# INF paths in Platforms/Xiaomi/cloverPkg/Include/{APRIORI,DXE}.inc, and reports
+# exactly which files are still missing from a checkout.
+#
+# How to extract
+# --------------
+# 1. Boot the tablet into fastboot (power + volume-down) and dump the partition
+#    that holds the EDK2 image.  scripts/dump-clover-facts.sh in UniXNU-clover
+#    records `ls -l /dev/block/by-name` into facts/, which is what settles the
+#    partition name on this device; on Snapdragon SDM660 Xiaomi tablets the
+#    firmware volume lives in the A/B "uefi"/"uefi2" style partitions, not in
+#    boot.img or recovery.img.
+#
+#       adb shell su -c 'ls -l /dev/block/by-name'      > facts/by-name.txt
+#       fastboot fetch uefi_a uefi_a.img   # TODO-DEVICE: confirm slot naming
+#
+# 2. Open the image with tianocore/edk2-pytool-extensions' `uefisection` or,
+#    more directly, with `UEFIExtract` (LongSoft/UEFITool) or `uefi-firmware-
+#    parser`.  Enumerate the DXE firmware volumes and export each driver named
+#    below as `<BaseName>.efi`, plus its depex section as `<BaseName>.depex`.
+#
+# 3. Generate the stub INF for each export, matching the shape Device-Binaries
+#    checks in (upstream's clean_up.py post-processes these; see the sample at
+#    the end of this file):
+#
+#       [Defines]
+#         INF_VERSION  = 0x0001001B
+#         BASE_NAME    = EnvDxe
+#         FILE_GUID    = 90A49AFD-422F-08AE-9611-E788D3804845
+#         MODULE_TYPE  = DXE_DRIVER
+#         VERSION_STRING = 1.0
+#         ENTRY_POINT  = EfiEntry
+#       [Binaries.AARCH64]
+#         DXE_DEPEX|EnvDxe.depex|*
+#         PE32|EnvDxe.efi|*
+#       [Depex]
+#         TRUE
+#
+#    Take FILE_GUID from the firmware volume entry itself, never from lavender:
+#    the GUID identifies the module inside the FV and the vendor build for this
+#    tablet may differ.
+#
+# 4. Run scripts/check-clover-uefi.py --binaries <checkout> until it reports no
+#    missing files, then build (see README.md).
+#
+# Ordering note: a module without a .depex line in the list below genuinely has
+# no depex upstream either (HashDxe, LimitsDxe and RngDxe are UEFI_DRIVER
+# modules whose stub declares only PE32), so do not fabricate one.
+#
+
+# ---------------------------------------------------------------------------
+# Raw configuration blobs (Binaries/clover/RawFiles)
+# ---------------------------------------------------------------------------
+
+# Firmware-volume payloads referenced by Include/RAW.inc.  Without SecParti.cfg
+# the Qualcomm partition drivers cannot map slot names to LUNs, which is the
+# difference between "the ESP shows up" and "nothing to boot from".
+R Binaries/clover/RawFiles/SecParti.cfg
+R Binaries/clover/RawFiles/QcomChargerCfg.cfg
+R Binaries/clover/RawFiles/BATTERY.PROVISION
+R Binaries/clover/RawFiles/tracer_event.cfg
+
+# Read by the prebuilt display/USB stack at runtime rather than carried in the
+# FV; upstream ships both for lavender.  Missing means the stock panel or the
+# fastboot-mode USB function table may not initialise.
+O Binaries/clover/RawFiles/uefiplat.cfg
+O Binaries/clover/RawFiles/BDS_Menu.cfg
+O Binaries/clover/RawFiles/logo1.bmp
+O Binaries/clover/RawFiles/battery_miui.bmp
+
+# ---------------------------------------------------------------------------
+# Qualcomm DXE drivers (Binaries/clover/QcomPkg/Drivers)
+# ---------------------------------------------------------------------------
+# Each module needs <stub>.inf and <stub>.efi.  The .depex lines below mirror
+# what Device-Binaries/lavender ships for the same module.
+
+# --- SoC / firmware infrastructure: needed before almost anything else -------
+R Binaries/clover/QcomPkg/Drivers/EnvDxe/EnvDxe.inf
+R Binaries/clover/QcomPkg/Drivers/EnvDxe/EnvDxe.efi
+R Binaries/clover/QcomPkg/Drivers/EnvDxe/EnvDxe.depex
+R Binaries/clover/QcomPkg/Drivers/DALSYSDxe/DALSYSDxe.inf
+R Binaries/clover/QcomPkg/Drivers/DALSYSDxe/DALSYSDxe.efi
+R Binaries/clover/QcomPkg/Drivers/DALSYSDxe/DALSYSDxe.depex
+R Binaries/clover/QcomPkg/Drivers/HWIODxe/HWIODxe.inf
+R Binaries/clover/QcomPkg/Drivers/HWIODxe/HWIODxe.efi
+R Binaries/clover/QcomPkg/Drivers/HWIODxe/HWIODxe.depex
+R Binaries/clover/QcomPkg/Drivers/ChipInfoDxe/ChipInfoDxe.inf
+R Binaries/clover/QcomPkg/Drivers/ChipInfoDxe/ChipInfoDxe.efi
+R Binaries/clover/QcomPkg/Drivers/ChipInfoDxe/ChipInfoDxe.depex
+R Binaries/clover/QcomPkg/Drivers/PlatformInfoDxe/PlatformInfoDxe.inf
+R Binaries/clover/QcomPkg/Drivers/PlatformInfoDxe/PlatformInfoDxe.efi
+R Binaries/clover/QcomPkg/Drivers/PlatformInfoDxe/PlatformInfoDxe.depex
+R Binaries/clover/QcomPkg/Drivers/SmemDxe/SmemDxe.inf
+R Binaries/clover/QcomPkg/Drivers/SmemDxe/SmemDxe.efi
+R Binaries/clover/QcomPkg/Drivers/SmemDxe/SmemDxe.depex
+R Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
+R Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.efi
+R Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.depex
+R Binaries/clover/QcomPkg/Drivers/SPMIDxe/SPMIDxe.inf
+R Binaries/clover/QcomPkg/Drivers/SPMIDxe/SPMIDxe.efi
+R Binaries/clover/QcomPkg/Drivers/SPMIDxe/SPMIDxe.depex
+
+# --- clocks, power, remote processors ---------------------------------------
+R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
+R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.efi
+R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.depex
+R Binaries/clover/QcomPkg/Drivers/NpaDxe/NpaDxe.inf
+R Binaries/clover/QcomPkg/Drivers/NpaDxe/NpaDxe.efi
+R Binaries/clover/QcomPkg/Drivers/NpaDxe/NpaDxe.depex
+R Binaries/clover/QcomPkg/Drivers/GLinkDxe/GLinkDxe.inf
+R Binaries/clover/QcomPkg/Drivers/GLinkDxe/GLinkDxe.efi
+R Binaries/clover/QcomPkg/Drivers/GLinkDxe/GLinkDxe.depex
+R Binaries/clover/QcomPkg/Drivers/ULogDxe/ULogDxe.inf
+R Binaries/clover/QcomPkg/Drivers/ULogDxe/ULogDxe.efi
+R Binaries/clover/QcomPkg/Drivers/ULogDxe/ULogDxe.depex
+R Binaries/clover/QcomPkg/Drivers/TLMMDxe/TLMMDxe.inf
+R Binaries/clover/QcomPkg/Drivers/TLMMDxe/TLMMDxe.efi
+R Binaries/clover/QcomPkg/Drivers/TLMMDxe/TLMMDxe.depex
+R Binaries/clover/QcomPkg/Drivers/LimitsDxe/LimitsDxe.inf
+R Binaries/clover/QcomPkg/Drivers/LimitsDxe/LimitsDxe.efi
+
+# --- storage: eMMC only ------------------------------------------------------
+# clover is the eMMC variant of the Mi Pad 4, so SdccDxe is the driver that
+# produces BLOCK_IO for the ESP and userdata.  UFSDxe is deliberately absent
+# from APRIORI.inc and DXE.inc; extracting it is wasted work.
+R Binaries/clover/QcomPkg/Drivers/SdccDxe/SdccDxe.inf
+R Binaries/clover/QcomPkg/Drivers/SdccDxe/SdccDxe.efi
+R Binaries/clover/QcomPkg/Drivers/SdccDxe/SdccDxe.depex
+
+# --- display -----------------------------------------------------------------
+# clover.dsc sets USE_CUSTOM_DISPLAY_DRIVER=0, exactly like gta4l, so the
+# DisplayDxe branch in APRIORI.inc and DXE.inc is compiled out and SiliciumPkg's
+# SimpleFbDxe takes over the splash framebuffer that the boot ROM already
+# configured (1200x1920, 32 bpp, at 0x9D500000 per clover's own
+# cont_splash_mem reservation).  The vendor driver is therefore optional today,
+# and it becomes required the moment the panel needs something SimpleFbDxe
+# cannot do, which is the expected path once the ADT's display properties are
+# fed to XNU.  Marked O so the checker reports it as "nice to have" rather than
+# blocking the first build.
+O Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.inf
+O Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.efi
+O Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.depex
+
+# --- input, chargers, sensors -------------------------------------------------
+R Binaries/clover/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.inf
+R Binaries/clover/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.efi
+R Binaries/clover/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.depex
+R Binaries/clover/QcomPkg/Drivers/PmicDxe/PmicDxeLa.inf
+R Binaries/clover/QcomPkg/Drivers/PmicDxe/PmicDxeLa.efi
+R Binaries/clover/QcomPkg/Drivers/PmicDxe/PmicDxeLa.depex
+R Binaries/clover/QcomPkg/Drivers/QcomChargerDxe/QcomChargerDxeLA.inf
+R Binaries/clover/QcomPkg/Drivers/QcomChargerDxe/QcomChargerDxeLA.efi
+R Binaries/clover/QcomPkg/Drivers/QcomChargerDxe/QcomChargerDxeLA.depex
+R Binaries/clover/QcomPkg/Drivers/ChargerExDxe/ChargerExDxe.inf
+R Binaries/clover/QcomPkg/Drivers/ChargerExDxe/ChargerExDxe.efi
+R Binaries/clover/QcomPkg/Drivers/ChargerExDxe/ChargerExDxe.depex
+R Binaries/clover/QcomPkg/Drivers/AdcDxe/AdcDxe.inf
+R Binaries/clover/QcomPkg/Drivers/AdcDxe/AdcDxe.efi
+R Binaries/clover/QcomPkg/Drivers/AdcDxe/AdcDxe.depex
+R Binaries/clover/QcomPkg/Drivers/TsensDxe/TsensDxe.inf
+R Binaries/clover/QcomPkg/Drivers/TsensDxe/TsensDxe.efi
+R Binaries/clover/QcomPkg/Drivers/TsensDxe/TsensDxe.depex
+R Binaries/clover/QcomPkg/Drivers/I2CDxe/I2CDxe.inf
+R Binaries/clover/QcomPkg/Drivers/I2CDxe/I2CDxe.efi
+R Binaries/clover/QcomPkg/Drivers/I2CDxe/I2CDxe.depex
+R Binaries/clover/QcomPkg/Drivers/SPIDxe/SPIDxe.inf
+R Binaries/clover/QcomPkg/Drivers/SPIDxe/SPIDxe.efi
+R Binaries/clover/QcomPkg/Drivers/SPIDxe/SPIDxe.depex
+
+# --- USB ----------------------------------------------------------------------
+R Binaries/clover/QcomPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf
+R Binaries/clover/QcomPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.efi
+R Binaries/clover/QcomPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.depex
+R Binaries/clover/QcomPkg/Drivers/UsbDeviceDxe/UsbDeviceDxe.inf
+R Binaries/clover/QcomPkg/Drivers/UsbDeviceDxe/UsbDeviceDxe.efi
+R Binaries/clover/QcomPkg/Drivers/UsbDeviceDxe/UsbDeviceDxe.depex
+R Binaries/clover/QcomPkg/Drivers/UsbConfigDxe/UsbConfigDxe.inf
+R Binaries/clover/QcomPkg/Drivers/UsbConfigDxe/UsbConfigDxe.efi
+R Binaries/clover/QcomPkg/Drivers/UsbConfigDxe/UsbConfigDxe.depex
+R Binaries/clover/QcomPkg/Drivers/UsbMsdDxe/UsbMsdDxe.inf
+R Binaries/clover/QcomPkg/Drivers/UsbMsdDxe/UsbMsdDxe.efi
+R Binaries/clover/QcomPkg/Drivers/UsbMsdDxe/UsbMsdDxe.depex
+
+# --- crypto -------------------------------------------------------------------
+R Binaries/clover/QcomPkg/Drivers/HashDxe/HashDxe.inf
+R Binaries/clover/QcomPkg/Drivers/HashDxe/HashDxe.efi
+R Binaries/clover/QcomPkg/Drivers/RNGDxe/RngDxe.inf
+R Binaries/clover/QcomPkg/Drivers/RNGDxe/RngDxe.efi
+
+# ---------------------------------------------------------------------------
+# Provided by the Device-Binaries submodule, no extraction needed
+# ---------------------------------------------------------------------------
+# The XHCI host stack is SoC-independent, so upstream keeps one copy for every
+# device; clover.dsc uses it unchanged.
+P Binaries/generic/QcomPkg/Drivers/XhciDxe/XhciDxe.inf
+P Binaries/generic/QcomPkg/Drivers/XhciDxe/XhciDxe.efi
+P Binaries/generic/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.inf
+P Binaries/generic/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.efi
+P Binaries/generic/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.depex
+
+# ---------------------------------------------------------------------------
+# Not required for clover
+# ---------------------------------------------------------------------------
+# Listed so nobody wastes an extraction pass on them.
+#   Binaries/clover/QcomPkg/Drivers/UFSDxe/*          -- UFS, board is eMMC
+#   Binaries/clover/QcomPkg/Drivers/QcomBds/*         -- Mu's BdsDxe is used
+#   Binaries/clover/QcomPkg/Drivers/FontDxe/*         -- SimpleFbDxe path only
+#   Binaries/clover/QcomPkg/Drivers/VerifiedBootDxe/* -- disabled: SHIP_MODE=FALSE
+#   Binaries/clover/QcomPkg/Drivers/MdtpDxe/*         -- Mi Trust Protocol, unused
+#   Binaries/clover/MiPkg/**                          -- Xiaomi vendor extras

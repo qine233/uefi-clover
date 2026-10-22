@@ -1,0 +1,12 @@
+##
+#  cloverPkg - Xiaomi Mi Pad 4 8" LTE (clover, Qualcomm SDM660)
+#
+#  Derived from the upstream Mu-Silicium lavender (Redmi Note 7) and gta4l
+#  (Samsung Galaxy Tab A7) platform packages, both SDM/Kryo boards with the
+#  same StarlordPkg SoC package that clover needs.
+#
+#  This file declares no tokens of its own. It exists so the package directory
+#  has a DEC entry, matching the empty lavender.dec and gta4l.dec upstream.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##

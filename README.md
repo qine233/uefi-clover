@@ -233,23 +233,26 @@ macOS Python 3.9.
 
 ## Trying it on the tablet
 
-Zero writes, reversible by a power cycle, so this is the first on-device test:
+The test that means something is a **cold boot from the flashed partition**, because
+that is the path where the stock loader draws the Mi splash first; anything taking
+the panel over afterwards is unmissable.
 
 ```sh
 adb -s 81ffcaaa reboot bootloader   # -s matters the moment an emulator is attached too
-fastboot devices                    # must list 81ffcaaa
-fastboot boot ~/clover-out/Mu-clover-v0.img
+fastboot devices                   # must list 81ffcaaa
+fastboot flash boot ~/clover-out/Mu-clover-v0.img
+fastboot reboot
 ```
 
-What counts as a result: a Mu boot menu (or any change from the stock splash) means
-the firmware volume was entered; a black screen means nothing yet, since display is
-the part this board has not proven.  A hang recovers with Power+Volume-Down held for
-10-20 seconds -- `fastboot boot` leaves no partition touched.  If the tablet is stuck
-at the stock splash, that key combination is also how it gets back into fastboot.
+`fastboot boot <img>` is still worth running first as a zero-write smoke test, but on
+this tablet its result is not readable: that path never draws the splash, so the
+screen ends up backlight-on-and-black whether the firmware runs or not, and the device
+returns to fastboot when the payload exits.
 
-If it only works as a flashed image, `boot` is `mmcblk0p12` and its stock contents are
-dumped in the board repository at `facts/<serial>-<stamp>/img/unixnu-boot.img`, exactly
-the partition's 67108864 bytes:
+A hang recovers with Power+Volume-Down held for 10-20 seconds.  To put the tablet back
+the way it came -- `boot` is `mmcblk0p12` and its stock contents are dumped in the board
+repository at `facts/<serial>-<stamp>/img/unixnu-boot.img`, exactly the partition's
+67108864 bytes:
 
 ```sh
 fastboot flash boot ~/UniXNU-clover/facts/81ffcaaa-20261022-210928/img/unixnu-boot.img
@@ -262,7 +265,7 @@ fastboot flash boot ~/UniXNU-clover/facts/81ffcaaa-20261022-210928/img/unixnu-bo
 | Package skeleton | done, every line traced to a real upstream file, to clover's own device tree, or to this unit's firmware |
 | Memory map | 47 rows transcribed row-for-row from the device's `uefiplat.cfg` (14 `[MemoryMap]` + 33 `[RegisterMap]`), no undocumented collisions |
 | Configuration map | 27 `[ConfigParameters]` keys, same file; `NumCpus = 4`/`NumActiveCores = 8` cross-checked against `/proc/cpuinfo` |
-| Display | `USE_CUSTOM_DISPLAY_DRIVER = 0`, `SimpleFbDxe` on the splash handed over at `0x9D400000` |
+| Display | `USE_CUSTOM_DISPLAY_DRIVER = 1`: this unit's own `DisplayDxe` blob brings up MDSS, the nt51021 panel and the pm660l backlight, the route lavender uses on the same silicon. `= 0` (`SimpleFbDxe` over the splash handed over at `0x9D400000`, base taken from the memory map by name, stride assumed == width) was the starting point and is still one line away |
 | Storage | eMMC through `SdccDxe`; UFS dropped (the driver is in the volume, the board is not UFS) |
 | USB | DWC3 device stack only; no XHCI anywhere in this unit's firmware |
 | Prebuilt blobs | extracted into `Binaries/clover` from the tablet's own xbl; gitignored, re-create with the extractor |
@@ -270,9 +273,12 @@ fastboot flash boot ~/UniXNU-clover/facts/81ffcaaa-20261022-210928/img/unixnu-bo
 | Second DRAM bank | not described; `0x100000000 + 0x7E4C0000` needs a map row and a second `/chosen` window before XNU sees past 4 GiB |
 | Boot image packing | header version 0, page 0x1000, kernel 0x8000 / ramdisk 0x1000000 / tags 0x100 — read off this unit's own `boot` and `recovery` headers, which agree, and pinned by the checker |
 | Board DTB | `Resources/DTBs/clover.{dtb,dts}` cut from this unit's boot image, record `037` of 111; the checker is at 0 errors / 0 warnings |
-| Real build | done: `build_uefi.py -d clover` on the colima guest compiles BootShim, resolves `Conf`, builds every module, and writes `FVMAIN_COMPACT` at exactly `0x300000` (27% full), `SILICIUM_UEFI.fd`, the gzipped FD and `Mu-clover.img` — no warnings |
+| Real build | done: `build_uefi.py -d clover` on the colima guest compiles BootShim, resolves `Conf`, builds every module, and writes `FVMAIN_COMPACT` at exactly `0x300000` (29% full with `DisplayDxe`, 27% without), `SILICIUM_UEFI.fd` and `Mu-clover.img` — no warnings |
 | Packing | `build_uefi.py` forwards a `[boot_image]` key only when it is truthy, so `base` cannot be set to 0 and mkbootimg's `0x10000000` default stands, and it never passes `--pagesize` at all. The packed `Mu-clover.img` therefore declares 0x10008000 / 0x11000000 / 0x10000100 with 2048-byte pages, where this unit's own boot header says 0x8000 / 0x1000000 / 0x100 with 4096 (`scripts/decode-boot-header.py` prints both side by side). Every Mu device shares that default, but all of them are header v1 or newer, and clover is v0 -- the one generation whose ABL may compute section offsets from its own page size instead of the header's. So `scripts/pack-clover-bootimg.py` re-packs the same payload against the tablet's own header page: page 4096, base 0, stock cmdline / board name / os_version, with only `kernel_size`, `ramdisk_size` and the image id changed. Its output `Mu-clover-v0.img` is the image to put on the device from here on, and `build-clover-uefi.sh` runs it as the last step. The UniXNU path is unaffected (it packs from `board.toml`'s `[bootimg.image]`, base 0, page 4096) |
-| First on-device attempt | `fastboot boot` accepted the generic-geometry image and the tablet came back to fastboot; flashing it to `boot` and rebooting left the stock Mi splash frozen, with no adb/fastboot/USB node. ABL was undamaged (`fastboot getvar` still answered `product: clover`, `unlocked: yes`), so the image was loaded and something ran or hung -- but nothing drew. Two candidate causes remain, in order of cost to test: header geometry (now removed by the stock-cloned repack) and the inherited framebuffer (if a v0 repack still shows nothing, set `USE_CUSTOM_DISPLAY_DRIVER = 1`; this unit's own `DisplayDxe` blob is already in `Binaries/clover`, and lavender -- the proven SDM660 `boot_image` board -- uses exactly that) |
+| How to read an on-device test | `fastboot boot <img>` and a cold `flash boot` + reboot are **not comparable**. On this tablet the `fastboot boot` path never draws the ABL splash, so it ends at "backlight on, black" whether or not our code runs, and drops back to fastboot when the payload exits -- black after `fastboot boot` carries no information. Judge images by flash + cold reboot, where the Mi logo is drawn first and anything taking over is unmistakable. (`fastboot boot` is still the zero-write smoke test.) Note too that `system_profiler SPUSBDataType` returns nothing from the build host's shell here, so "no USB node" is not evidence of anything; use `ioreg -p IOUSB` |
+| On-device rounds | (1) generic geometry, cold boot -> Mi logo frozen; (2) stock-geometry repack, `fastboot boot` -> black (uninformative); (3) the same image with `DisplayDxe`, `fastboot boot` -> black (uninformative); (4) the same image, cold boot -> **Mi logo frozen, exactly like round 1**. Two different display routes behaving identically means the framebuffer is not the variable: nothing ever draws. ABL was intact after every round (`fastboot getvar` answered `product: clover`, `unlocked: yes`) |
+| Payload compression | the leading suspect, now removed. `kernel_compression = "gzip"` does not produce a self-decompressing image: `create_android_boot_img` swaps BootShim + FD for a **bare gzip stream**, so the first thing the loader enters is `1f 8b`, and BootShim never decompresses anything (it copies `FD_SIZE` bytes to `FD_BASE` and branches). Only an ABL that gunzips boot images can run that, and this unit's own kernels are arm64 Image.gz-with-stub -- they start with executable code and unpack themselves, so its 2018 header-v0 loader never needed gunzip. `= none` puts BootShim's head at the kernel entry (3 486 671-byte kernel, 3 497 984-byte image, against a 64 MiB partition and a 512 MiB download buffer) |
+| Next suspect, if `= none` still freezes the logo | BootShim's deliberately abused arm64 header: `text_offset = FD_BASE = 0x9fc00000` and `image_size = 0x300000`, both far outside what the arm64 boot protocol allows (text_offset must be small and page-aligned), so a strict loader either rejects the image or loads it to the wrong place. Fixing that means the overlay owning `BootShim.S`, which is an upstream file today. The other candidate is the FD landing at `0x9FC00000` colliding with whatever the running loader still occupies there |
 
 Flashing this does **not** touch `xbl`.  `clover.toml` declares `[boot_image]`,
 the same output type lavender and the rest of the Xiaomi entries use: the

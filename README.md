@@ -236,8 +236,8 @@ macOS Python 3.9.
 Zero writes, reversible by a power cycle, so this is the first on-device test:
 
 ```sh
-adb reboot bootloader          # or hold Power+Volume-Down from off
-fastboot devices               # must list 81ffcaaa
+adb -s 81ffcaaa reboot bootloader   # -s matters the moment an emulator is attached too
+fastboot devices                    # must list 81ffcaaa
 fastboot boot ~/clover-out/Mu-clover.img
 ```
 

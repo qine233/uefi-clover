@@ -27,3 +27,8 @@ __pycache__/
 *~
 *.swp
 .env
+
+# ... but Resources/DTBs/clover.dtb is a source, not an extraction: build_uefi.py
+# appends it to the firmware volume when packing, exactly as upstream ships one
+# for each of its 163 devices.
+!/Resources/DTBs/*.dtb

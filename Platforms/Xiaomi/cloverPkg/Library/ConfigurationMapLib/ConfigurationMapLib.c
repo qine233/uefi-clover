@@ -1,24 +1,28 @@
 /**
   Configuration map for the Xiaomi Mi Pad 4 8" LTE (clover, Qualcomm SDM660).
 
-  The values are inherited from Mu-Silicium's lavenderPkg, the other SDM660 board
-  on the same StarlordPkg SoC package, and each one that is really a board fact
-  has been checked against clover's own device tree:
+  Every entry is a [ConfigParameters] key of the uefiplat.cfg inside this
+  tablet's own xbl partition
+  (UniXNU-clover/facts/<serial>-<stamp>/fw/xbl-uefiplat.txt), with the value the
+  device carries.  That file is what the Qualcomm SEC parses, so these are not
+  board facts inferred from a sibling design: they are the numbers the prebuilt
+  drivers in Binaries/clover were shipped to read.
 
-    SharedIMEMBaseAddr  0x146BF000   qcom,msm-imem@146bf000
-    DloadCookieAddr     0x01FD3000   inside TCSR_TCSR_REGS (0x01FC0000 + 0x26000)
-    DBIDumpDDRBase      0x9FFD0000   the DBI Dump entry of Library/MemoryMapLib
-    GCCResetValueAddr   0x146BF028   the IMEM cookie block above
-    TzAppsRegn*         0x86D00000 + 0x02200000   qcom_seecom, verbatim
+  Six keys the device publishes are left out because none of them is a
+  configuration entry our build consumes: ConfigParameterCount,
+  PlatConfigFileName, OsTypeString, SpecialLogPartition, DefaultChargerApp and
+  DefaultBDSBootApp.  The last of those, "LinuxLoader", is the stock ABL image
+  and is exactly the boot target UniXNU replaces.
 
-  EnableSecurityHoleForSplashPartition is kept on: UniXNU takes the cont_splash
+  EnableSecurityHoleForSplashPartition is kept on: UniXNU takes the splash
   region over from the stock ABL, and the Qualcomm stack refuses to map that
   partition into the UEFI address space unless the hole is allowed.
 
-  TODO-DEVICE: NumCpus keeps lavender's 4 (with NumActiveCores 8). Confirm it
-  against facts/<serial>-<stamp>/cpu/possible.txt from the tablet; Kryo 260 in
-  this unit is 4x A53 + 4x A73, and StarlordPkg already publishes
-  PcdCoreCount|8 and PcdClusterCount|2.
+  NumCpus 4 with NumActiveCores 8 is what the device states, and the two
+  together are not a contradiction: the first counts clusters, the second
+  cores.  /proc/cpuinfo from the tablet agrees, with eight CPUs whose parts are
+  0x801 (four Kryo 260 Silver, Cortex-A53 licensed) and 0x800 (four Kryo 260
+  Gold, Cortex-A73 licensed) -- StarlordPkg's PcdCoreCount|8, PcdClusterCount|2.
 
   @copyright  SPDX-License-Identifier: BSD-2-Clause-Patent
 **/

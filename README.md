@@ -29,23 +29,34 @@ scripts/check-clover-uefi.py                   verify the result, and the two re
 
 | | |
 | --- | --- |
-| SoC | SDM660, `qcom,msm-id = <317 0x0>` (`0x13D`) |
+| SoC | Qualcomm SDM660 |
 | Silicon package | `Silicon/Qualcomm/StarlordPkg` |
-| Cores | 4 Cortex-A53 `0x0-0x3` @1804800 kHz, 4 Kryo gold `0x100-0x103` @2208000 kHz |
+| Board id | `qcom,msm-id = <317 0>`, `qcom,board-id = <0x0001000b 0>` — platform 11 (MTP) with subtype 1, read off the merged dtb on the device |
+| Cores | 8 CPUs, `cpu@0-3` (`reg` 0x0-0x3) are CPU part `0x801` and `cpu@100-103` (`reg` 0x100-0x103) are `0x800` — Kryo 260 Silver/A53-based and Gold/A73-based, 1.8 and 2.2 GHz in the downstream tree; `enable-method = "psci"` |
 | GIC | distributor `0x17A00000`/`0x10000`, redistributor `0x17B00000`/`0x100000`, stride `0x20000` |
 | Timebase | 19.2 MHz |
-| DRAM | low bank at `0x80000000`; the 4 GiB unit adds `0x1800000000` (not described yet) |
-| Panel | 1200×1920, 32 bpp, splash handed over at `0x9D500000` + `0x2400000` |
+| DRAM | `0x80000000` + `0x80000000` and `0x100000000` + `0x7E4C0000` (the 4 GiB unit; only the low bank is described) |
+| Panel | 1200×1920, 32 bpp, splash handed over at `0x9D400000` + `0x2400000` |
 | Storage | eMMC (`sdhc_1` at `0x0c0c4000`) — **no UFS** |
 | Console | `blsp1_uart2` at `0x0C170000`, 115200 |
 | Firmware volume | `0x9FC00000` + `0x300000` |
 
-Both device trees disagree in one place that matters: `sdm660-common.dtsi` puts
-the splash at `0x9d400000`, and `clover-overlay.dtsi` overrides it to
-`0x9d500000` with `0x2400000` bytes.  The overlay follows the override, because
-that is what this board's ABL actually reserves, and that shift is what squeezes
-`FV Region` down to 1 MiB and moves `pstore` out of a usable address (it lands
-inside the firmware volume, so a panic goes to the UART).
+The two things here that a device tree cannot settle were settled by the tablet
+itself.  `sdm660-common.dtsi` puts the splash at `0x9d400000` and
+`clover-overlay.dtsi` overrides it to `0x9d500000`, but the `uefiplat.cfg`
+inside *this unit's* xbl partition reserves `0x9D400000` + `0x2400000` as
+"Display Reserved", and stock xbl has already drawn into it before any UEFI code
+runs — so the framebuffer SimpleFbDxe can hand over is at `0x9D400000`, which is
+what `MemoryMapLib.c`, `clover.toml`, and the ADT's `display`/`framebuffer0` all
+say.  The same file's `[MemoryMap]` (14 rows) and `[RegisterMap]` (33 rows) are
+transcribed row for row into `Library/MemoryMapLib`, and its `[ConfigParameters]`
+(27 of 33 keys) into `Library/ConfigurationMapLib`; the map stops at
+`0xA0000000`, so nothing above the low 2 GiB bank is described to XNU yet.
+
+One consequence of that adjacency: `ramoops`/pstore wants `0x9FE00000` + `0x100000`
+on this SoC, which is inside the firmware volume, so there is no usable panic
+region under UniXNU and a panic goes to the UART instead.
+
 
 ## Setup
 
@@ -116,18 +127,34 @@ The two package roots are the board repository's: `{tree}/package` supplies
 `UniXNUDxe` has a Depex on the variable arch plus write protocols, which Mu's
 variable stack (`VariableRuntimeDxe`, in `APRIORI.inc`) provides.
 
-## Binaries/clover does not exist yet
+## Binaries/clover: extracted from this tablet, not from Device-Binaries
 
 `Project-Silicium/Device-Binaries` has 75 device directories and clover is not
-among them; the nearest is lavender, another SDM660 board.  So the firmware
-cannot link until the tablet's own DXE drivers are extracted — that is the whole
-of `proprietary-files.txt`, and `check-clover-uefi.py` will not stop reporting
-the 33 outstanding paths until they are on disk.
+among them; the nearest is lavender, another SDM660 board.  So the blob set is
+produced locally, from the unit's own firmware:
 
-`apply-clover-overlay.py` never touches `Binaries/`; populate
-`<checkout>/Binaries/clover/` from the dump and the checker confirms each stub
-INF's `[Binaries.AARCH64]` table against the files next to it, which is the
-error class that otherwise surfaces as an indecipherable AutoGen failure.
+```sh
+python3 scripts/extract-clover-blobs.py --xbl <dump>/fw/p-xbl.bin --list   # inventory
+python3 scripts/extract-clover-blobs.py --xbl <dump>/fw/p-xbl.bin          # write it
+```
+
+clover has no `uefi`/`uefi_a` partition.  The SEC in `xbl` (mmcblk0p1) gunzips a
+firmware volume that lives *inside that same partition* — a gzip stream at
+offset `0xa89b0` on this unit, inflating to a `_FVH` volume with `FvLength`
+`0x459040`, 83 FFS records of which 68 are AArch64 PE32 images.  The extractor
+walks those records and writes only what `APRIORI.inc`, `DXE.inc` and `RAW.inc`
+ask for, regenerating each stub INF with the `FILE_GUID` read from the volume
+rather than one borrowed from lavender; every module this board carries matched
+a GUID upstream already publishes.  That lands 91 files under `Binaries/clover`
+(30 INF, 30 EFI, 27 DEPEX, 4 RAW config blobs), and the checker resolves all
+33 blob paths the firmware volume requests against them.
+
+`Binaries/` is gitignored — the set comes from a device nobody else owns, and
+`proprietary-files.txt` is the reviewable contract for it.  `apply-clover-overlay.py`
+never touches it, so a checkout has to be populated the same way.  The checker
+compares each stub INF's `[Binaries.AARCH64]` table with the files next to it,
+which is the error class that otherwise surfaces as an indecipherable AutoGen
+failure.
 
 ## Checking
 
@@ -144,28 +171,35 @@ checkout.  `map` parses `MemoryMapLib.c` and fails on any overlap that is not
 the documented IMEM nesting.  `board` pins the geometry across the two
 repositories: `[uefi_fd]` in clover.toml, the `UEFI FD` row, the ADT's
 `uefi_fd`, the splash window in `[[bootimg.dtb_node]]` versus `Display Reserved`,
-`header_version` in both configs, and whether board.toml still carries
-`UNIXNU_BUILD`.
+every ADT reserved region against the memory map (contained, or an announced
+collision on the device's own carve-outs), `header_version` in both configs, and
+whether board.toml still carries `UNIXNU_BUILD`.
 
-The TOML-backed groups need Python 3.11 or the `tomli` module; the rest runs on
-3.9.
+Point `--checkout` at this repository to check the overlay alone; upstream's two
+`!include`s are then reported as unresolved rather than as errors, because the
+Mu packages only exist in a real checkout.  The TOML groups use `tomllib`,
+`tomli`, or the built-in subset reader, so the whole check runs on the stock
+macOS Python 3.9.
 
 ## Status
 
 | | |
 | --- | --- |
-| Package skeleton | done, every line traced to a real upstream file or to clover's own device tree |
-| Memory map | rebuilt from `clover-overlay.dtsi`, 50 rows, no undocumented collisions |
-| Display | `USE_CUSTOM_DISPLAY_DRIVER = 0`, `SimpleFbDxe` on the splash handed over at `0x9D500000` |
-| Storage | eMMC through `SdccDxe`; UFS dropped |
-| Prebuilt blobs | **not available** — extraction from the tablet is the blocker |
-| Board-id / ABL parameters | `TODO-DEVICE`, from `scripts/dump-clover-facts.sh` in the board repo |
-| Second DRAM bank | not described; the 4 GiB unit's `0x1800000000` bank needs a map row and an ADT `/chosen` entry |
-| Real build | unverified — no Mu-Silicium checkout with clover blobs exists |
+| Package skeleton | done, every line traced to a real upstream file, to clover's own device tree, or to this unit's firmware |
+| Memory map | 47 rows transcribed row-for-row from the device's `uefiplat.cfg` (14 `[MemoryMap]` + 33 `[RegisterMap]`), no undocumented collisions |
+| Configuration map | 27 `[ConfigParameters]` keys, same file; `NumCpus = 4`/`NumActiveCores = 8` cross-checked against `/proc/cpuinfo` |
+| Display | `USE_CUSTOM_DISPLAY_DRIVER = 0`, `SimpleFbDxe` on the splash handed over at `0x9D400000` |
+| Storage | eMMC through `SdccDxe`; UFS dropped (the driver is in the volume, the board is not UFS) |
+| USB | DWC3 device stack only; no XHCI anywhere in this unit's firmware |
+| Prebuilt blobs | extracted into `Binaries/clover` from the tablet's own xbl; gitignored, re-create with the extractor |
+| Board-id / DRAM / userdata / GIC | dumped and applied — `scripts/dump-clover-facts.sh` in the board repo, results under `facts/` |
+| Second DRAM bank | not described; `0x100000000 + 0x7E4C0000` needs a map row and a second `/chosen` window before XNU sees past 4 GiB |
+| Boot image packing | `header_version = 1` is unconfirmed: this stock boot header's address fields do not line up with the documented layout, so `[bootimg.image]` still carries placeholder offsets |
+| Real build | unverified — the overlay is complete and self-consistent, but no Mu-Silicium checkout has been assembled on this host yet |
 
-`NumCpus` in `ConfigurationMapLib.c` and the userdata GPT window are marked
-`TODO-DEVICE` in the source; they are the two numbers a dump settles and the
-checker cannot.
+Flashing this firmware means writing a new `xbl` partition, the one the signed
+boot chain starts from: a bad image there is the recoverable kind of bad only as
+long as PBL still accepts the EDL path.  Nothing here has been flashed.
 
 ## License
 

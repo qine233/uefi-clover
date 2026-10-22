@@ -2,13 +2,18 @@
 #  Xiaomi Mi Pad 4 8" LTE (clover, SDM660) - UEFI platform description.
 #
 #  Based on Mu-Silicium's lavender.dsc (the other SDM660 / StarlordPkg board)
-#  with the numbers taken from clover's own device tree:
+#  with the numbers taken from this tablet itself -- the device tree for the
+#  silicon, and the uefiplat.cfg inside its own xbl partition for everything
+#  the firmware addresses (UniXNU-clover/facts/<serial>-<stamp>/):
 #
 #    DRAM base            0x80000000              (sdm660-common.dtsi memory node)
 #    GIC distributor      0x17A00000              (StarlordPkg PcdGicDistributorBase)
 #    GIC redistributors   0x17B00000              (StarlordPkg PcdGicRedistributorsBase)
 #    panel                1200 x 1920, 32 bpp     (dsi-panel-nt51021-boe-video.dtsi)
-#    splash region        0x9D500000 + 0x02400000 (clover-overlay.dtsi &cont_splash_mem)
+#    splash region        0x9D400000 + 0x02400000 ("Display Reserved" in uefiplat.cfg;
+#                                                   clover-overlay.dtsi moves it to
+#                                                   0x9D500000 for a kernel that draws
+#                                                   its own splash, and loses)
 #    UEFI FD              0x9FC00000 + 0x00300000 (Resources/Configs/clover.toml)
 #
 #  USE_CUSTOM_DISPLAY_DRIVER is 0, the choice gta4l makes: the panel is already

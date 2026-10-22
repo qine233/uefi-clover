@@ -25,6 +25,11 @@
 # placeholder: every module listed below is a real DXE driver that upstream
 # extracts for lavender, with the same directory and file names.
 #
+# It has been produced, and the way it was produced is the way to do it again:
+# scripts/extract-clover-blobs.py reads the firmware volume out of the unit's own
+# xbl image and writes each module this repository asks for, plus a regenerated
+# stub INF.  See "How to extract" below.
+#
 # Line format
 # -----------
 #   <marker> <path>
@@ -32,36 +37,44 @@
 #   path     relative to the root of a Mu-Silicium checkout (that is also where
 #            the `Binaries/` submodule is mounted).
 #   R        required: clover.dsc/clover.fdf will not build without it
-#   O        optional: read at runtime by a prebuilt driver, absent means a
-#            degraded but bootable firmware
-#   P        provided: already present in the submodule (Binaries/generic), no
-#            extraction needed
+#   O        optional: the module is in the volume but sits behind a clover.dsc
+#            guard that this board has off (USE_CUSTOM_DISPLAY_DRIVER), so no
+#            build fails without it; flip the guard and it becomes R
 #
-# Everything after a "#" is a comment, blank lines are ignored.
+# Everything after a "#" is a comment, blank lines are ignored.  There is no
+# third marker: clover.dsc asks for nothing under Binaries/generic, which is
+# why the XHCI stack upstream shares has its own note at the foot of this file.
 # scripts/check-clover-uefi.py reads this manifest, cross-checks it against the
 # INF paths in Platforms/Xiaomi/cloverPkg/Include/{APRIORI,DXE}.inc, and reports
 # exactly which files are still missing from a checkout.
 #
 # How to extract
 # --------------
-# 1. Boot the tablet into fastboot (power + volume-down) and dump the partition
-#    that holds the EDK2 image.  scripts/dump-clover-facts.sh in UniXNU-clover
-#    records `ls -l /dev/block/by-name` into facts/, which is what settles the
-#    partition name on this device; on Snapdragon SDM660 Xiaomi tablets the
-#    firmware volume lives in the A/B "uefi"/"uefi2" style partitions, not in
-#    boot.img or recovery.img.
+# 1. clover has no `uefi` partition.  The GPT (facts/<serial>-<stamp>/
+#    partition-names.txt, mmc_partitions.txt) has xbl, xbl_cfg, tz, hyp, sec,
+#    abl, ... and nothing named uefi: the SEC in xbl gunzips a firmware volume
+#    that lives *inside the same partition*.  Dump that partition:
 #
-#       adb shell su -c 'ls -l /dev/block/by-name'      > facts/by-name.txt
-#       fastboot fetch uefi_a uefi_a.img   # TODO-DEVICE: confirm slot naming
+#       fastboot fetch xbl xbl.img          # or dd if=/dev/block/mmcblk0p1
 #
-# 2. Open the image with tianocore/edk2-pytool-extensions' `uefisection` or,
-#    more directly, with `UEFIExtract` (LongSoft/UEFITool) or `uefi-firmware-
-#    parser`.  Enumerate the DXE firmware volumes and export each driver named
-#    below as `<BaseName>.efi`, plus its depex section as `<BaseName>.depex`.
+#    scripts/dump-clover-blobs.sh in UniXNU-clover does exactly this and keeps
+#    the gzip stream and its uefiplat.cfg under facts/<serial>-<stamp>/fw/.
 #
-# 3. Generate the stub INF for each export, matching the shape Device-Binaries
-#    checks in (upstream's clean_up.py post-processes these; see the sample at
-#    the end of this file):
+# 2. Hand it to the extractor.  It finds the gzip stream, inflates it, checks the
+#    volume header (`_FVH`, FFS2 FileSystemGuid, FvLength 0x459040 on this unit),
+#    walks the 83 FFS records, and writes only what the three include files ask
+#    for -- so the blob set on disk is exactly the build's request list:
+#
+#       python3 scripts/extract-clover-blobs.py --xbl xbl.img
+#       python3 scripts/extract-clover-blobs.py --xbl xbl.img --list   # inventory
+#
+#    Add `--list` first to see the volume without writing anything, and
+#    `--out <dir>` to build somewhere else.  Binaries/ is gitignored: the blob
+#    set comes from a device nobody else owns, its provenance is the dump, and
+#    this manifest is the reviewable contract.
+#
+# 3. The extractor regenerates the stub INF for each export, in the shape
+#    Device-Binaries uses (upstream's clean_up.py post-processes these):
 #
 #       [Defines]
 #         INF_VERSION  = 0x0001001B
@@ -76,11 +89,13 @@
 #       [Depex]
 #         TRUE
 #
-#    Take FILE_GUID from the firmware volume entry itself, never from lavender:
-#    the GUID identifies the module inside the FV and the vendor build for this
-#    tablet may differ.
+#    FILE_GUID always comes from the firmware volume entry itself, never from
+#    lavender: the GUID identifies the module inside the FV, and the module names
+#    in the vendor's own build path disagree with upstream's directory names in
+#    several cases.  The GUID is the join key, and every module this board
+#    carries matched a GUID upstream already publishes.
 #
-# 4. Run scripts/check-clover-uefi.py --binaries <checkout> until it reports no
+# 4. Run scripts/check-clover-uefi.py --checkout <checkout> until it reports no
 #    missing files, then build (see README.md).
 #
 # Ordering note: a module without a .depex line in the list below genuinely has
@@ -92,21 +107,48 @@
 # Raw configuration blobs (Binaries/clover/RawFiles)
 # ---------------------------------------------------------------------------
 
-# Firmware-volume payloads referenced by Include/RAW.inc.  Without SecParti.cfg
+# Firmware-volume payloads carried by Include/RAW.inc.  Without SecParti.cfg
 # the Qualcomm partition drivers cannot map slot names to LUNs, which is the
 # difference between "the ESP shows up" and "nothing to boot from".
+#
+# The four FREEFORM GUIDs in RAW.inc are the device's own: the tablet's firmware
+# volume names SecParti.cfg A1E235DE-..., tracer_event.cfg F12A1F3D-...,
+# QcomChargerCfg.cfg 45FE4B7C-... and BATTERY.PROVISION F780C779-... (run
+# scripts/extract-clover-blobs.py --xbl <dump> --list and look at the
+# USER_INTERFACE,RAW records).  Upstream uses the same GUIDs for the same blobs,
+# so the prebuilt drivers find them either way.
 R Binaries/clover/RawFiles/SecParti.cfg
 R Binaries/clover/RawFiles/QcomChargerCfg.cfg
 R Binaries/clover/RawFiles/BATTERY.PROVISION
 R Binaries/clover/RawFiles/tracer_event.cfg
 
-# Read by the prebuilt display/USB stack at runtime rather than carried in the
-# FV; upstream ships both for lavender.  Missing means the stock panel or the
-# fastboot-mode USB function table may not initialise.
-O Binaries/clover/RawFiles/uefiplat.cfg
-O Binaries/clover/RawFiles/BDS_Menu.cfg
-O Binaries/clover/RawFiles/logo1.bmp
-O Binaries/clover/RawFiles/battery_miui.bmp
+# The rest of this volume's 14 RAW records, in the order the firmware lists them.
+# They sit in the FV -- unlike the lavender ports, where some are files on the
+# EFI system partition instead -- but nothing in clover.fdf includes them, so
+# they are inventory, not build inputs: add them to RAW.inc if a prebuilt driver
+# turns out to look one up by GUID.
+#
+#   A91D838E-A5FA-4138-825D-455E2303079E  BDS_Menu.cfg                     0xb1d
+#   A91D838E-A5FA-4138-825D-455E23030794  logo1.bmp                       0x2466
+#   3E5584ED-05D4-4267-9048-0D47F76F4248  battery_symbol_Soc10.bmp       0x10020
+#   4753E815-DDD8-402D-BF69-9B8C4EB7573E  battery_symbol_NoBattery.bmp    0x1577c
+#   03DED53E-BECD-428F-9F79-5ABA64C58445  battery_symbol_Nocharger.bmp    0x14144
+#   8B86CD38-C772-4FCF-85AA-345B2B3C1AB4  battery_symbol_LowBatteryCharging.bmp
+#   3FD97907-93F1-4349-AF3C-3B68B0A5E626  battery_symbol_LowBattery.bmp    0x14144
+#   E2EA5A4F-98BD-4203-AB49-399505DDFB7D  tsens_thermal_symbol.bmp        0x15774
+#   C72FB1A9-5527-4E13-BAC4-F671D0330145  tsens_thermal_err_symbol.bmp    0x1577c
+#
+# The last record is the volume-top file FC510EE7-FFDC-11D4-BD41-0080C73C8881 at
+# offset 0x78, an unnamed 0x51c-byte RAW entry -- EDK II's FV directory itself.
+#
+# Two blobs the lavender manifest carries are NOT in this volume, so nobody
+# should add them back from a template: `battery_miui.bmp` (Xiaomi's own boot
+# branding, absent from a stock MIUI firmware volume), and `uefiplat.cfg`, which
+# is not an FV record at all -- it is a file inside the xbl partition, ahead of
+# the gzip stream.  Its contents matter more to this port than any driver does:
+# [MemoryMap], [RegisterMap] and [ConfigParameters] are transcribed verbatim into
+# Library/MemoryMapLib and Library/ConfigurationMapLib, and the copy extracted
+# from the tablet lives at UniXNU-clover/facts/<serial>-<stamp>/fw/xbl-uefiplat.txt.
 
 # ---------------------------------------------------------------------------
 # Qualcomm DXE drivers (Binaries/clover/QcomPkg/Drivers)
@@ -171,12 +213,13 @@ R Binaries/clover/QcomPkg/Drivers/SdccDxe/SdccDxe.depex
 # clover.dsc sets USE_CUSTOM_DISPLAY_DRIVER=0, exactly like gta4l, so the
 # DisplayDxe branch in APRIORI.inc and DXE.inc is compiled out and SiliciumPkg's
 # SimpleFbDxe takes over the splash framebuffer that the boot ROM already
-# configured (1200x1920, 32 bpp, at 0x9D500000 per clover's own
-# cont_splash_mem reservation).  The vendor driver is therefore optional today,
-# and it becomes required the moment the panel needs something SimpleFbDxe
-# cannot do, which is the expected path once the ADT's display properties are
-# fed to XNU.  Marked O so the checker reports it as "nice to have" rather than
-# blocking the first build.
+# configured (1200x1920, 32 bpp, at 0x9D400000 -- "Display Reserved" in this
+# unit's uefiplat.cfg; clover-overlay.dtsi's 0x9D500000 is the Android kernel's
+# own reservation and the firmware beats it).  The vendor driver is therefore
+# optional today, and it becomes required the moment the panel needs something
+# SimpleFbDxe cannot do, which is the expected path once the ADT's display
+# properties are fed to XNU.  Marked O so the checker reports it as "nice to
+# have" rather than blocking the first build.
 O Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.inf
 O Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.efi
 O Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.depex
@@ -228,21 +271,16 @@ R Binaries/clover/QcomPkg/Drivers/RNGDxe/RngDxe.inf
 R Binaries/clover/QcomPkg/Drivers/RNGDxe/RngDxe.efi
 
 # ---------------------------------------------------------------------------
-# Provided by the Device-Binaries submodule, no extraction needed
-# ---------------------------------------------------------------------------
-# The XHCI host stack is SoC-independent, so upstream keeps one copy for every
-# device; clover.dsc uses it unchanged.
-P Binaries/generic/QcomPkg/Drivers/XhciDxe/XhciDxe.inf
-P Binaries/generic/QcomPkg/Drivers/XhciDxe/XhciDxe.efi
-P Binaries/generic/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.inf
-P Binaries/generic/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.efi
-P Binaries/generic/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.depex
-
-# ---------------------------------------------------------------------------
 # Not required for clover
 # ---------------------------------------------------------------------------
 # Listed so nobody wastes an extraction pass on them.
-#   Binaries/clover/QcomPkg/Drivers/UFSDxe/*          -- UFS, board is eMMC
+#   Binaries/clover/QcomPkg/Drivers/UFSDxe/*          -- UFS, board is eMMC.  It
+#       genuinely is in this volume (0D35CD8E-97EA-4F9A-96AF-0F0D89F76567,
+#       0x16046 bytes); it is excluded because the SDCC driver owns the disk.
+#   Binaries/generic/QcomPkg/Drivers/XhciDxe/*,
+#   .../XhciPciEmulationDxe/*                         -- no host controller.
+#       SDM660 carries the DWC3 USB 2.0 device controller and the tablet's own
+#       volume has 68 AArch64 modules without one; DXE.inc says the same.
 #   Binaries/clover/QcomPkg/Drivers/QcomBds/*         -- Mu's BdsDxe is used
 #   Binaries/clover/QcomPkg/Drivers/FontDxe/*         -- SimpleFbDxe path only
 #   Binaries/clover/QcomPkg/Drivers/VerifiedBootDxe/* -- disabled: SHIP_MODE=FALSE

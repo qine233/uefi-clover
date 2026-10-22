@@ -81,8 +81,11 @@
   INF Binaries/clover/QcomPkg/Drivers/LimitsDxe/LimitsDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf
 
-  INF Binaries/generic/QcomPkg/Drivers/XhciPciEmulationDxe/XhciPciEmulationDxe.inf
-  INF Binaries/generic/QcomPkg/Drivers/XhciDxe/XhciDxe.inf
+  # No XhciDxe / XhciPciEmulationDxe, which upstream takes from Binaries/generic:
+  # SDM660 has the DWC3 USB 2.0 device controller only, and the tablet's own
+  # firmware volume confirms it -- 68 AArch64 modules, not one of them XHCI.  The
+  # USB modules below are the gadget side plus a host stack that will simply find
+  # no root hub.
 
   INF MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBusDxe.inf
   INF MdeModulePkg/Bus/Usb/UsbKbDxe/UsbKbDxe.inf

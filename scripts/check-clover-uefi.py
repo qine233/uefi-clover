@@ -33,10 +33,12 @@ HERE = pathlib.Path(__file__).resolve()
 REPO = HERE.parents[1]
 PKG = REPO / "Platforms" / "Xiaomi" / "cloverPkg"
 
-# Facts about the tablet, each proven by a device-tree line quoted in
-# UniXNU-clover/notes/clover-device-tree-sources.md.
+# Facts about the tablet.  DRAM_BASE, the splash window, the firmware volume
+# and the stack are all rows of the uefiplat.cfg in the device's own xbl
+# partition (UniXNU-clover/facts/<serial>-<stamp>/fw/xbl-uefiplat.txt); the
+# panel comes from the nt51021_boe downstream device tree.
 DRAM_BASE = 0x80000000
-SPLASH_BASE = 0x9D500000
+SPLASH_BASE = 0x9D400000
 SPLASH_SIZE = 0x02400000
 FD_BASE = 0x9FC00000
 FD_SIZE = 0x300000
@@ -51,11 +53,14 @@ PANEL = (1200, 1920, 32)
 # shader page at 0xf0b00000 (mainline's gpu@f0b00000, deleted again by
 # /delete-node/) only becomes live when a Qualcomm KGSL build loads
 # a512_zap.mdt from userspace, which no UniXNU boot does, so it needs no
-# reservation either.  These four are the only sanctioned collisions; anything
-# else is a real bug.
+# reservation either.  pil_adsp_mem is a collision the device's own map creates:
+# the adsp window runs 0x92a00000..0x94900000, and uefiplat.cfg lists nothing
+# between SMEM and "DXE Heap", so its top 9 MiB sit in memory the stock firmware
+# treats as its own heap.  These four are the only sanctioned collisions;
+# anything else is a real bug.
 # framebuffer0 is NOT exempt: it is 1200*1920*4 bytes at the splash base and must
 # sit inside the Display Reserved row, which is exactly what this group proves.
-OVERLAP_EXEMPT = ("pil_venus_mem", "ramoops", "gpu_zap_mem")
+OVERLAP_EXEMPT = ("pil_venus_mem", "ramoops", "gpu_zap_mem", "pil_adsp_mem")
 
 # Upstream describes the IMEM window twice: "IMEM Base" spans the whole 256 KiB
 # at 0x14680000 and "IMEM Cookie Base" names the download cookie page inside it.
@@ -199,16 +204,16 @@ def expand_fv(fdf: pathlib.Path, defines: dict, problems: list, externals=None):
 
 
 def load_manifest(path: pathlib.Path, problems: list):
-    """proprietary-files.txt as {path: marker}; marker is R, O or P."""
+    """proprietary-files.txt as {path: marker}; marker is R or O."""
     entries = {}
     for lineno, raw in enumerate(path.read_text().splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
-        m = re.fullmatch(r"([ROP])\s+(\S+)", line)
+        m = re.fullmatch(r"([RO])\s+(\S+)", line)
         if not m:
             problems.append(f"proprietary-files.txt:{lineno}: '{raw.strip()}' is not "
-                            "'R|O|P <path>'")
+                            "'R|O <path>'")
             continue
         if m.group(2) in entries:
             problems.append(f"proprietary-files.txt:{lineno}: {m.group(2)} listed twice")
@@ -256,9 +261,6 @@ def check_group_fv(problems: list, warnings: list, args_unixnu=None):
         if marker is None:
             problems.append(f"{where}: {path} is in the firmware volume but not in "
                             "proprietary-files.txt")
-        elif kind == "raw" and marker == "P":
-            problems.append(f"{where}: {path} is a clover blob, marked P (provided) "
-                            "in the manifest")
         elif kind == "inf" and marker == "O" and "USE_CUSTOM_DISPLAY_DRIVER" not in defines:
             warnings.append(f"{path} is optional in the manifest but unconditional here")
 
@@ -291,6 +293,12 @@ def check_group_fv(problems: list, warnings: list, args_unixnu=None):
     return defines, included, externals
 
 
+def mu_checkout(path: pathlib.Path) -> bool:
+    """Whether this directory is a Mu-based tree rather than the overlay alone."""
+    return any((path / probe).is_dir() for probe in
+               ("Silicon", "Common", "MdeModulePkg", "ArmPkg"))
+
+
 def check_group_blobs(included, externals, checkout, problems: list, warnings: list):
     """Presence of the prebuilt blobs, as far as the host can see them."""
     binaries = [e[0] for e in included if e[0].startswith("Binaries/")]
@@ -309,12 +317,19 @@ def check_group_blobs(included, externals, checkout, problems: list, warnings: l
     for target, where in externals:
         # A !include of an upstream package is only real once the overlay is applied;
         # EDK II finds these along PACKAGES_PATH, so look in the package roots the
-        # board.toml lists rather than walking the whole checkout.
+        # board.toml lists rather than walking the whole checkout.  Pointing
+        # --checkout at this overlay instead is how it gets used before a Mu-Silicium
+        # tree exists on the host, and the upstream packages are not in it by design.
+        if not mu_checkout(checkout):
+            continue
         roots = ["", "Silicon/Qualcomm", "Silicon/Silicium", "Common/Mu",
                  "Common/Mu_OEM_Sample", "Silicium-ACPI", "Platforms/Xiaomi"]
         if not any((checkout / root / target).is_file() for root in roots):
             problems.append(f"{where}: !include {target} resolves nowhere on the "
                             f"package path of {checkout.name}")
+    if checkout != REPO and not mu_checkout(checkout):
+        warnings.append(f"{checkout} has no Mu-Silicium packages, so the "
+                        f"{len(externals)} upstream !include(s) were not resolved")
     for path in binaries:
         full = checkout / path
         if not full.is_file():
@@ -381,8 +396,146 @@ def load_toml(path: pathlib.Path):
         try:
             import tomli as tomllib                     # its pure-Python predecessor
         except ModuleNotFoundError:
-            return None
+            # macOS still ships 3.9, and this file has to be checkable on the same
+            # host that runs the dump scripts.  The subset below covers the two
+            # board files: tables, arrays, inline tables, hex, strings, booleans.
+            return toml_subset(path.read_text())
     return tomllib.loads(path.read_text())
+
+
+def toml_split(text: str, at: str = ",") -> list:
+    """Split on `at` outside quotes and brackets."""
+    parts, depth, quote, start = [], 0, None, 0
+    for i, char in enumerate(text):
+        if quote:
+            if char == quote and text[i - 1:i] != "\\":
+                quote = None
+            continue
+        if char in "\"'":
+            quote = char
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+        elif char == at and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    parts.append(text[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def toml_unquote(text: str) -> str:
+    text = text.strip()
+    inner = text[1:-1]
+    return inner.replace('\\"', '"').replace("\\\\", "\\") if text[0] == '"' else inner
+
+
+def toml_value(text: str):
+    text = text.strip()
+    if text.startswith("[") and text.endswith("]"):
+        return [toml_value(item) for item in toml_split(text[1:-1])]
+    if text.startswith("{") and text.endswith("}"):
+        return toml_table(text[1:-1])
+    if text[:1] in "\"'" and text[-1:] == text[:1] and len(text) > 1:
+        return toml_unquote(text)
+    if text in ("true", "false"):
+        return text == "true"
+    try:
+        return int(text, 16) if text[:2].lower() == "0x" else int(text, 10)
+    except ValueError:
+        return text
+
+
+def toml_table(text: str) -> dict:
+    table = {}
+    for item in toml_split(text):
+        key, _, value = item.partition("=")
+        table[toml_value(key.strip())] = toml_value(value)
+    return table
+
+
+def toml_subset(text: str) -> dict:
+    root: dict = {}
+    stack: list = []                                   # the tables [a.b] descends into
+    for line in _toml_logical_lines(text):
+        line = line.strip()
+        if line.startswith("[[") and line.endswith("]]"):
+            keys = [toml_value(k) for k in line[2:-2].split(".")]
+            parent = _toml_descend(root, keys[:-1])
+            entry: dict = {}
+            parent.setdefault(keys[-1], [])
+            if not isinstance(parent[keys[-1]], list):
+                raise ValueError(f"{line} redeclares {keys[-1]} as an array")
+            parent[keys[-1]].append(entry)
+            stack = [entry]
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            keys = [toml_value(k) for k in line[1:-1].split(".")]
+            stack = [root]
+            for key in keys:
+                child = stack[-1].setdefault(key, {})
+                if not isinstance(child, dict):
+                    raise ValueError(f"{line} redeclares {key} as a value")
+                stack.append(child)
+            continue
+        key, _, value = line.partition("=")
+        stack[-1][toml_value(key.strip())] = toml_value(value)
+    return root
+
+
+def _toml_descend(root: dict, keys: list) -> dict:
+    table = root
+    for key in keys:
+        table = table.setdefault(key, {})
+    return table
+
+
+def _toml_logical_lines(text: str):
+    """One entry per key or header, comments dropped and arrays joined."""
+    buffer = ""
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        cut = _toml_comment_at(line)
+        if not buffer and cut == 0:
+            continue
+        line = line[:cut].rstrip() if cut >= 0 else line
+        if not buffer and not line.strip():
+            continue
+        buffer = f"{buffer} {line.strip()}".strip() if buffer else line.strip()
+        if _toml_balanced(buffer):
+            yield buffer
+            buffer = ""
+    if buffer:
+        yield buffer
+
+
+def _toml_comment_at(line: str) -> int:
+    quote = None
+    for i, char in enumerate(line):
+        if quote:
+            if char == quote and line[i - 1:i] != "\\":
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "#":
+            return i
+    return -1
+
+
+def _toml_balanced(text: str) -> bool:
+    quote = None
+    depth = 0
+    for i, char in enumerate(text):
+        if quote:
+            if char == quote and text[i - 1:i] != "\\":
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+    return depth <= 0
 
 
 def find_unixnu(explicit: pathlib.Path):
@@ -429,11 +582,19 @@ def check_adt(unixnu, map_rows, problems, warnings):
             continue
         holder = next((row for row, (b, s) in map_rows.items() if b <= base and base + size <= b + s),
                       None)
-        if holder is None:
-            problems.append(f"ADT region {name} 0x{base:x}+0x{size:x} is not covered by any "
-                            "MemoryMapLib reservation; XNU would be handed firmware memory")
-        else:
+        if holder is not None:
             note("*", f"ADT {name} sits inside UEFI {holder!r}")
+            continue
+        # The device's own map describes part of DRAM and leaves the rest out; a
+        # carve-out with no row around it is only a problem where it cuts into a
+        # row, because that is memory the stock firmware does claim.
+        cut = [row for row, (b, s) in map_rows.items() if b < base + size and base < b + s]
+        if cut:
+            problems.append(f"ADT region {name} 0x{base:x}+0x{size:x} cuts into "
+                            + " and ".join(repr(row) for row in cut)
+                            + "; XNU would be handed firmware memory")
+        else:
+            note("*", f"ADT {name} lies in memory the device map does not list at all")
 
 
 def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
@@ -442,9 +603,10 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
         problems.append("Resources/Configs/clover.toml is missing; build_uefi.py and "
                         "UniXNU's firmware.py both find the board through it")
         return
-    toml = load_toml(config)
-    if toml is None:
-        note("-", "clover.toml not parsed (needs Python 3.11 or the tomli module)")
+    try:
+        toml = load_toml(config)
+    except Exception as error:
+        problems.append(f"clover.toml did not parse: {error}")
         return
     fd = toml.get("uefi_fd", {})
     for key, want in (("base", FD_BASE), ("size", FD_SIZE)):
@@ -494,9 +656,10 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
     if unixnu is None:
         note("-", "UniXNU-clover not found; use --unixnu to cross-check board.toml")
         return
-    board = load_toml(unixnu / "board.toml")
-    if board is None:
-        note("-", f"{unixnu}/board.toml not parsed (needs tomllib or tomli)")
+    try:
+        board = load_toml(unixnu / "board.toml")
+    except Exception as error:
+        problems.append(f"{unixnu}/board.toml did not parse: {error}")
         return
     fw = board.get("firmware", {})
     if fw.get("config") != "clover":
@@ -524,7 +687,7 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
     dtb_nodes = board.get("bootimg", {}).get("dtb_node", [])
     splash_row = map_rows.get("Display Reserved") if map_rows else None
     quoted = re.findall(r"0x[0-9a-fA-F]+", str(dtb_nodes))
-    if splash_row and "0x9d500000" not in [v.lower() for v in quoted]:
+    if splash_row and f"0x{SPLASH_BASE:x}" not in [v.lower() for v in quoted]:
         problems.append("board.toml's [[bootimg.dtb_node]] splash reg does not name "
                         f"0x{SPLASH_BASE:x}, the address MemoryMapLib reserves for the panel")
     if map_rows:

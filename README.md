@@ -246,7 +246,8 @@ macOS Python 3.9.
 | Second DRAM bank | not described; `0x100000000 + 0x7E4C0000` needs a map row and a second `/chosen` window before XNU sees past 4 GiB |
 | Boot image packing | header version 0, page 0x1000, kernel 0x8000 / ramdisk 0x1000000 / tags 0x100 — read off this unit's own `boot` and `recovery` headers, which agree, and pinned by the checker |
 | Board DTB | `Resources/DTBs/clover.{dtb,dts}` cut from this unit's boot image, record `037` of 111; the checker is at 0 errors / 0 warnings |
-| Real build | toolchain proven end-to-end on the colima guest: BootShim compiles (`clang -target aarch64-linux-gnu` + `llvm-objcopy`), `Conf` templates resolve, EDK II reaches `Build.py` and starts parsing `clover.dsc`.  Not yet linked into an FV |
+| Real build | done: `build_uefi.py -d clover` on the colima guest compiles BootShim, resolves `Conf`, builds every module, and writes `FVMAIN_COMPACT` at exactly `0x300000` (27% full), `SILICIUM_UEFI.fd`, the gzipped FD and `Mu-clover.img` — no warnings |
+| Packing, unverified | `build_uefi.py` forwards a `[boot_image]` key only when it is truthy, so `base` cannot be set to 0 and mkbootimg's `0x10000000` default stands, and it never passes `--pagesize` at all.  The packed `Mu-clover.img` therefore declares 0x10008000 / 0x11000000 / 0x10000100 with 2048-byte pages, where this unit's own boot header says 0x8000 / 0x1000000 / 0x100 with 4096 — `scripts/decode-boot-header.py` prints both side by side.  The UniXNU path is unaffected (it packs from `board.toml`'s `[bootimg.image]`, base 0, page 4096); the standalone image is not a flash candidate until that is reconciled |
 
 Flashing this firmware means writing a new `xbl` partition, the one the signed
 boot chain starts from: a bad image there is the recoverable kind of bad only as

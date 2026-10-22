@@ -29,6 +29,8 @@
 
 #include <Library/ConfigurationMapLib.h>
 
+#include "../../Include/Checkpoint.h"
+
 STATIC
 EFI_CONFIGURATION_ENTRY_DESCRIPTOR
 gConfigurationDescriptor[] = {
@@ -67,7 +69,16 @@ GetConfigurationMap (
   OUT EFI_CONFIGURATION_ENTRY_DESCRIPTOR **ConfigurationDescriptor,
   OUT UINT8                               *ConfigurationDescriptorCount)
 {
+  STATIC UINTN  mCalls;
+
   // Pass Data
   *ConfigurationDescriptor      = gConfigurationDescriptor;
   *ConfigurationDescriptorCount = ARRAY_SIZE (gConfigurationDescriptor);
+
+  // Stage 2 of Include/Checkpoint.h: the first caller is PlatformPeiLib, which
+  // runs in PEI next to MemoryInitPeiLib but in a different module, so a yellow
+  // bar without the green one would localise the stop to the memory HOB path.
+  if (mCalls++ == 0) {
+    CloverCheckpointBar (0x00200000, CLOVER_COLOR_YELLOW);
+  }
 }

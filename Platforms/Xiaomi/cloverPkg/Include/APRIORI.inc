@@ -7,8 +7,9 @@
 #    * UFSDxe is not started. The Mi Pad 4 8" LTE stores everything on eMMC 5.1
 #      (sdhc_1 @ 0x0C0C4000, CQE + HS400ES); its stock firmware has no UFS
 #      stack, so requiring that blob would only break the build.
-#    * The display comes from SiliciumPkg SimpleFbDxe over the stock ABL splash
-#      because clover.dsc sets USE_CUSTOM_DISPLAY_DRIVER = 0.
+#    * The display is this unit's own DisplayDxe blob plus DisplayReEnablerDxe,
+#      because clover.dsc sets USE_CUSTOM_DISPLAY_DRIVER = 1; the SimpleFbDxe
+#      branch below is what a 0 selects.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
@@ -16,6 +17,10 @@
 APRIORI DXE {
   INF MdeModulePkg/Core/Dxe/DxeMain.inf
   INF MdeModulePkg/Universal/PCD/Dxe/Pcd.inf
+
+  # The checkpoint bars of Include/Checkpoint.h: third, so the magenta bar means
+  # the DXE core dispatched an ordinary driver before any vendor blob had a turn.
+  INF cloverPkg/Drivers/CheckpointDxe/CheckpointDxe.inf
 
   INF Binaries/clover/QcomPkg/Drivers/EnvDxe/EnvDxe.inf
 

@@ -14,6 +14,10 @@
   INF MdeModulePkg/Core/RuntimeDxe/RuntimeDxe.inf
   INF MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf
 
+  # Stage 3 and 4 of Include/Checkpoint.h; APRIORI.inc starts it third so the
+  # magenta bar means the DXE core reached an ordinary driver.
+  INF cloverPkg/Drivers/CheckpointDxe/CheckpointDxe.inf
+
   INF Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
 
   INF MdeModulePkg/Universal/WatchdogTimerDxe/WatchdogTimer.inf

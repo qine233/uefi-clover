@@ -111,6 +111,15 @@
 
 [Components]
   #
+  # The checkpoint bars of Include/Checkpoint.h.  APRIORI.inc and DXE.inc put it in
+  # the firmware volume, but EDK2 only builds a module it sees in [Components]:
+  # "Module ... NOT found in DSC file; Is it really a binary module?" is the failure
+  # (measured), which is also why the vendor blobs work -- they are declared in
+  # QcomPkg.dsc.inc, not in the FDF.
+  #
+  cloverPkg/Drivers/CheckpointDxe/CheckpointDxe.inf
+
+  #
   # ACPI Tables. Silicium-ACPI has no clover board directory yet, so no tables
   # are compiled; gta4l leaves the same line commented out for that reason.
   #

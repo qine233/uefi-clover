@@ -38,11 +38,15 @@
   gEfiWatchdogTimerArchProtocolGuid ## CONSUMES
   gEfiTimerArchProtocolGuid        ## CONSUMES
   gEfiRealTimeClockArchProtocolGuid ## CONSUMES
+  gEfiVariableArchProtocolGuid     ## CONSUMES
   gEfiVariableWriteArchProtocolGuid ## CONSUMES
   gEfiBlockIoProtocolGuid          ## CONSUMES
   gEfiSimpleFileSystemProtocolGuid ## CONSUMES
   gEfiBdsArchProtocolGuid          ## CONSUMES
   gEfiUsbIoProtocolGuid            ## CONSUMES
+  gEfiFirmwareVolume2ProtocolGuid  ## CONSUMES
+  gEfiRuntimeArchProtocolGuid      ## CONSUMES
+  gEfiSecurityArchProtocolGuid     ## CONSUMES
 
 [Depex]
   TRUE

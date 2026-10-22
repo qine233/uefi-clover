@@ -25,11 +25,32 @@
                                                  CPU, watchdog, timer, RTC, variable
                                                  write, block I/O, file system, BDS,
                                                  USB
+     14..21 red    +0x00380000 .. +0x00540000    the Qualcomm dependency chain the
+                                                 vendor blobs wait on, read off the
+                                                 blobs' own depex sections: the DXE
+                                                 core's firmware-volume enumeration,
+                                                 RuntimeArch, SecurityArch, SMEM, the
+                                                 private GUID ten blobs share, ChipInfo,
+                                                 Clock, VariableArch
 
   Round 10 read stages 0, 1 and 3 -- green and magenta, no white -- so SEC
   decompressed FVMAIN, PEI built the HOBs, DxeMain started and dispatched an
   ordinary driver, and the stop is somewhere in the DXE dispatch after that.
   Stages 5..13 exist to say where.
+
+  Round 11 read green, magenta and three evenly spaced cyan bands and no white,
+  which puts the stop in the same gap. The red stages exist because that gap is
+  not one step: parsing the depex sections under Binaries/clover (opcode 0x02
+  pushes a GUID, 0x03 ANDs, 0x06 TRUE, 0x08 ends the expression) shows the vendor
+  blobs are chained, not parallel.  EnvDxe and SmemDxe wait on nothing; DALSYSDxe
+  waits on SMEM; and ChipInfoDxe, ClockDxe, HWIODxe, I2CDxe, SPIDxe,
+  PlatformInfoDxe, PmicDxe, AdcDxe, TsensDxe and TLMMDxe all wait on
+  {0xAE37B942,0x457F,0x4C91,{0xA1,0x96,0xD9,0x66,0x9F,0xD3,0x47,0xA3}}, a GUID no
+  header in this tree declares -- so it is produced by a blob, and if that blob
+  does not run, ten of the thirty-five never even become schedulable.  DisplayDxe
+  then waits on SMEM, ChipInfo, Clock and eleven more, and SdccDxe (the eMMC that
+  has to give UniXNU its BLOCK_IO) waits on Clock and the timer.  The red bands
+  walk that chain in order.
 
   Round 10's offsets were 1 MiB apart (green +0x100000, magenta +0x300000). The
   ladder was then dense enough to read but too coarse to fit nine protocols into
@@ -56,6 +77,12 @@
 // scripts/check-clover-uefi.py fails the build if this and that row diverge.
 #define CLOVER_SPLASH_BASE  0x9D400000
 
+// EDK II builds these with -Werror, and two things in a comment can stop the
+// compile: a `/*` pair inside the block (a repo path spelled with a glob is the
+// way to do it by accident), and an apostrophe or quote, which clang reports as a
+// missing terminating character.  Write globs as "the .depex files under ..." and
+// leave the apostrophes out.
+//
 // 128 KiB: about 27 rows at a 1200-pixel stride, about 17 at 1920. Round 10's
 // 256 KiB bars were unmistakable, but at a 256 KiB pitch they would touch, and
 // thirteen bands have to share the 8 MiB BootShim filled.
@@ -66,6 +93,7 @@
 #define CLOVER_COLOR_MAGENTA  0xFFFF00FF
 #define CLOVER_COLOR_WHITE    0xFFFFFFFF
 #define CLOVER_COLOR_CYAN     0xFF00FFFF
+#define CLOVER_COLOR_RED      0xFFFF0000
 
 //
 // Plain stores, because this runs from PEI (before the DXE memory services exist)

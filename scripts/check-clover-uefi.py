@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Consistency check for the clover Mu-Silicium overlay.
 
-Run it from anywhere inside this repository.  Four groups, each independent:
+Run it from anywhere inside this repository.  Five groups, each independent:
 
   fv       expands Platforms/Xiaomi/cloverPkg/clover.fdf the way EDK II's FDF
            preprocessor would (!include, !if, !ifdef against the [Defines] of
@@ -19,6 +19,10 @@ Run it from anywhere inside this repository.  Four groups, each independent:
            geometry in Resources/Configs/clover.toml, the boot image header
            version, and the !ifdef $(UNIXNU_BUILD) contract in board.toml
            [firmware.defines].
+  inf      with --checkout, resolves every [Protocols] GUID this overlay's own
+           INFs name against the .dec files that same INF lists in [Packages].
+           EDK II turns a mismatch into build error 4000, which costs a compile
+           round; the checker reads the same .dec files for free.
 
 Exit status is 1 if any group reports an error; warnings do not fail the run.
 """
@@ -771,7 +775,7 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
             # both shapes. A table row the checker cannot see is a band nobody
             # validated.
             found = re.findall(r"CloverCheckpointBar\s*\(\s*(0x[0-9a-fA-F]+)", text)
-            found += re.findall(r"\{\s*&gEfi\w+,\s*(0x[0-9a-fA-F]+)\s*,", text)
+            found += re.findall(r"\{\s*&\w+,\s*(0x[0-9a-fA-F]+)\s*,", text)
             for offset in found:
                 stages.setdefault(int(offset, 0), []).append(path.name)
         row = map_rows.get("Display Reserved") if map_rows else None
@@ -930,6 +934,58 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
     note("*", f"cross-checked against {unixnu}")
 
 
+def check_group_inf(checkout, problems: list, warnings: list) -> None:
+    """Every protocol this overlay's own INFs name has to be declared by a .dec the
+    same INF lists in [Packages].
+
+    EDK II only puts the GUID into the module if the package that declares it is in
+    scope, and the failure is a build error, not a warning.  That cost a round:
+    CheckpointDxe asked for gEfiPcdInfoProtocolGuid, which lives in MdeModulePkg.dec
+    while the INF's [Packages] names only MdePkg, and the build stopped with
+    "Value of Protocol [gEfiPcdInfoProtocolGuid] is not found under [Protocols]
+    section in".  Reading the .dec files is cheap and the checkout is already on the
+    command line for the blob group.
+    """
+    if checkout is None:
+        note("-", "inf: not checked (no --checkout given)")
+        return
+    roots = [checkout] + [checkout / sub for sub in ("Mu_Basecore", "mu_basecore")]
+    checked = 0
+    for inf in sorted((REPO / "Platforms" / "Xiaomi" / "cloverPkg").rglob("*.inf")):
+        text = inf.read_text(errors="ignore")
+
+        def section(name):
+            m = re.search(r"^\[" + name + r"[^\]]*\](.*?)(?=^\[|\Z)",
+                          text, re.S | re.M)
+            return m.group(1) if m else ""
+
+        decs = []
+        for entry in re.findall(r"^\s*([\w./$-]+\.dec)\s*$", section("Packages"), re.M):
+            entry = entry.replace("$(WORKSPACE)", ".").lstrip("./")
+            for root in roots:
+                candidate = (root / entry)
+                if candidate.is_file():
+                    decs.append(candidate)
+                    break
+        if not decs:
+            warnings.append(f"{inf.name} lists no [Packages] .dec the checker can find "
+                            f"under {checkout}, so its protocol declarations are "
+                            "unverified")
+            continue
+        blob = "\n".join(p.read_text(errors="ignore") for p in decs)
+        for guid in re.findall(r"^\s*(g[A-Z]\w*Guid)\s", section("Protocols"), re.M):
+            checked += 1
+            if guid not in blob:
+                problems.append(
+                    f"{inf.name} names {guid} in [Protocols] but none of its "
+                    f"[Packages] .dec files ({', '.join(p.name for p in decs)}) "
+                    "declares it; the EDK II build fails with error 4000 on exactly "
+                    "this, so add the package that owns the GUID -- or watch a "
+                    "different protocol")
+    note("*", f"inf: {checked} [Protocols] entries in this overlay's INFs resolve "
+              "against their own [Packages] .dec files")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--checkout", type=pathlib.Path, default=None,
@@ -956,6 +1012,8 @@ def main() -> int:
     map_rows = check_group_map(problems, warnings)
     print("board: this overlay against UniXNU-clover")
     check_group_board(map_rows, defines, problems, warnings, args.unixnu)
+    print("inf: [Protocols] against [Packages] .dec")
+    check_group_inf(checkout, problems, warnings)
 
     if not args.quiet:
         for message in warnings:

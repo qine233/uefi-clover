@@ -99,7 +99,17 @@ ssh bash -c 'rsync -a --delete --exclude /Build/ --exclude /Conf/ '"$CHECKOUT"'/
 # dependencies inside the tree (Mu_Basecore/CryptoPkg/Binaries, Mu_Basecore/
 # BaseTools/Bin), and the rsync above would delete them again.
 echo "==> stuart_update"
-ssh bash -c 'cd ~/mu-build && ~/.venv-edk2/bin/python Platforms/Xiaomi/cloverPkg/DeviceBuild.py --update -t RELEASE 2>&1 | tail -n 8'
+# Retried, because `colima ssh` itself fails here now and then -- the guest is up,
+# `colima status` is happy, and the ssh session still exits 1 with no output at
+# all.  Twice in a row it looked like a build failure and cost a full round trip;
+# the command is idempotent, so the cheap answer is to try it again.
+for attempt in 1 2 3; do
+  if ssh bash -c 'cd ~/mu-build && ~/.venv-edk2/bin/python Platforms/Xiaomi/cloverPkg/DeviceBuild.py --update -t RELEASE 2>&1 | tail -n 8'; then
+    break
+  fi
+  [ "$attempt" = 3 ] && { echo "stuart_update failed on all $attempt attempts" >&2; exit 1; }
+  echo "   attempt $attempt failed (no output means the ssh session died, not the build); retrying"
+done
 
 # ------------------------------------------------------------------------ compile
 echo "==> build_uefi.py -d clover"

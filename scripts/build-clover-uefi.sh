@@ -87,7 +87,9 @@ if [ -f "$OVERLAY/scripts/apply-clover-overlay.py" ]; then
   python3 "$OVERLAY/scripts/apply-clover-overlay.py" --uefi "$CHECKOUT" --no-check
 fi
 echo "==> syncing $CHECKOUT into the guest"
-ssh mkdir -p ~/mu-build
+# Quoted so ~ means the guest's home. Bare, the host shell expands it first and
+# mkdir creates an empty mu-build in the mounted tree instead.
+ssh bash -c 'mkdir -p ~/mu-build'
 # Anchor both excludes to the workspace root. Unanchored, rsync also skipped
 # Mu_Basecore/BaseTools/Conf/, which holds target/tools_def/build_rule.template
 # -- stuart_build then died with "Template File Missing <ws>/Conf/target.txt".
@@ -105,3 +107,24 @@ ssh bash -c 'cd ~/mu-build && set -o pipefail && ~/.venv-edk2/bin/python build_u
 
 echo "==> artifacts"
 ssh bash -c 'ls -l ~/mu-build/Mu-clover* ~/mu-build/Build/cloverPkg/RELEASE_CLANGPDB/FV 2>/dev/null || true'
+
+# --------------------------------------------------------------- stock geometry
+# build_uefi.py packs the image with mkbootimg's *generic* defaults, because
+# every key it forwards comes from [boot_image] in clover.toml and the only key
+# upstream defines there is header_version: page size ends up 2048 and the load
+# base 0x10000000.  Those are the AOSP defaults, not clover's -- this tablet's
+# own boot header says 4096 and base 0, and it is a header v0 ABL, the one
+# generation that may compute section offsets from its own page size instead of
+# the header's.  Re-pack against the tablet's stock dump so the question cannot
+# matter; pack-clover-bootimg.py explains the rest.
+STOCK=${STOCK:-$(ls "$HOME"/UniXNU-clover/facts/*/img/unixnu-boot.img 2>/dev/null | tail -1)}
+if [ -n "$STOCK" ] && [ -f "$STOCK" ]; then
+  mkdir -p ~/clover-out
+  echo "==> copying Mu-clover.img out and repacking with $STOCK"
+  ssh bash -c 'cat ~/mu-build/Mu-clover.img' > ~/clover-out/Mu-clover.img
+  python3 "$(dirname "$0")/pack-clover-bootimg.py" \
+      --mu ~/clover-out/Mu-clover.img --stock "$STOCK" \
+      --out ~/clover-out/Mu-clover-v0.img
+else
+  echo "==> no stock boot dump found (set STOCK=...); skipping the geometry repack"
+fi

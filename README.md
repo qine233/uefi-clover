@@ -238,13 +238,14 @@ Zero writes, reversible by a power cycle, so this is the first on-device test:
 ```sh
 adb -s 81ffcaaa reboot bootloader   # -s matters the moment an emulator is attached too
 fastboot devices                    # must list 81ffcaaa
-fastboot boot ~/clover-out/Mu-clover.img
+fastboot boot ~/clover-out/Mu-clover-v0.img
 ```
 
 What counts as a result: a Mu boot menu (or any change from the stock splash) means
 the firmware volume was entered; a black screen means nothing yet, since display is
 the part this board has not proven.  A hang recovers with Power+Volume-Down held for
-10-20 seconds -- `fastboot boot` leaves no partition touched.
+10-20 seconds -- `fastboot boot` leaves no partition touched.  If the tablet is stuck
+at the stock splash, that key combination is also how it gets back into fastboot.
 
 If it only works as a flashed image, `boot` is `mmcblk0p12` and its stock contents are
 dumped in the board repository at `facts/<serial>-<stamp>/img/unixnu-boot.img`, exactly
@@ -270,7 +271,8 @@ fastboot flash boot ~/UniXNU-clover/facts/81ffcaaa-20261022-210928/img/unixnu-bo
 | Boot image packing | header version 0, page 0x1000, kernel 0x8000 / ramdisk 0x1000000 / tags 0x100 — read off this unit's own `boot` and `recovery` headers, which agree, and pinned by the checker |
 | Board DTB | `Resources/DTBs/clover.{dtb,dts}` cut from this unit's boot image, record `037` of 111; the checker is at 0 errors / 0 warnings |
 | Real build | done: `build_uefi.py -d clover` on the colima guest compiles BootShim, resolves `Conf`, builds every module, and writes `FVMAIN_COMPACT` at exactly `0x300000` (27% full), `SILICIUM_UEFI.fd`, the gzipped FD and `Mu-clover.img` — no warnings |
-| Packing, to check first | `build_uefi.py` forwards a `[boot_image]` key only when it is truthy, so `base` cannot be set to 0 and mkbootimg's `0x10000000` default stands, and it never passes `--pagesize` at all.  The packed `Mu-clover.img` therefore declares 0x10008000 / 0x11000000 / 0x10000100 with 2048-byte pages, where this unit's own boot header says 0x8000 / 0x1000000 / 0x100 with 4096 — `scripts/decode-boot-header.py` prints both side by side.  Every Mu device shares that default, so it is probably what ABL ignores; `fastboot boot` is the way to find out without committing to it.  The UniXNU path is unaffected (it packs from `board.toml`'s `[bootimg.image]`, base 0, page 4096) |
+| Packing | `build_uefi.py` forwards a `[boot_image]` key only when it is truthy, so `base` cannot be set to 0 and mkbootimg's `0x10000000` default stands, and it never passes `--pagesize` at all. The packed `Mu-clover.img` therefore declares 0x10008000 / 0x11000000 / 0x10000100 with 2048-byte pages, where this unit's own boot header says 0x8000 / 0x1000000 / 0x100 with 4096 (`scripts/decode-boot-header.py` prints both side by side). Every Mu device shares that default, but all of them are header v1 or newer, and clover is v0 -- the one generation whose ABL may compute section offsets from its own page size instead of the header's. So `scripts/pack-clover-bootimg.py` re-packs the same payload against the tablet's own header page: page 4096, base 0, stock cmdline / board name / os_version, with only `kernel_size`, `ramdisk_size` and the image id changed. Its output `Mu-clover-v0.img` is the image to put on the device from here on, and `build-clover-uefi.sh` runs it as the last step. The UniXNU path is unaffected (it packs from `board.toml`'s `[bootimg.image]`, base 0, page 4096) |
+| First on-device attempt | `fastboot boot` accepted the generic-geometry image and the tablet came back to fastboot; flashing it to `boot` and rebooting left the stock Mi splash frozen, with no adb/fastboot/USB node. ABL was undamaged (`fastboot getvar` still answered `product: clover`, `unlocked: yes`), so the image was loaded and something ran or hung -- but nothing drew. Two candidate causes remain, in order of cost to test: header geometry (now removed by the stock-cloned repack) and the inherited framebuffer (if a v0 repack still shows nothing, set `USE_CUSTOM_DISPLAY_DRIVER = 1`; this unit's own `DisplayDxe` blob is already in `Binaries/clover`, and lavender -- the proven SDM660 `boot_image` board -- uses exactly that) |
 
 Flashing this does **not** touch `xbl`.  `clover.toml` declares `[boot_image]`,
 the same output type lavender and the rest of the Xiaomi entries use: the

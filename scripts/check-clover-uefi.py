@@ -690,21 +690,49 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
                         f"both boot and recovery on this unit carry header version "
                         f"{BOOT_HEADER_VERSION}")
     # BootShim.S emits an arm64 Linux image header between its _Head branch and
-    # _Start, i.e. at blob offsets 8..63: text_offset = FD_BASE, image_size = FD_SIZE,
-    # "ARM\x64" at 56.  mkbootimg never writes that header -- the boot image header it
-    # does write lives in the image's first page, outside the kernel blob -- so the
-    # flag only decides whether the loader is invited to parse those fields.  An
-    # uncompressed payload leaves the magic live, and text_offset = 0x9fc00000 is not a
-    # value the arm64 boot protocol permits (it wants a small, page-aligned offset), so
-    # a strict loader may reject the image or trust the size it was handed.  Not a
-    # hard error: round 5 was exactly this pair and froze at the Mi logo, which is what
-    # the gzip builds did too, so the mechanism is inferred, never measured.
-    if bool(shim.get("requires_kernel_header")) and str(kernel.get("kernel_compression")) == "none":
-        warnings.append("clover.toml asks BootShim for the arm64 image header and for an "
-                        "uncompressed payload together: the loader then sees a live "
-                        "ARM\\x64 magic whose text_offset is FD_BASE, illegal per the arm64 "
-                        "boot protocol.  Keep the payload compressed, or set "
-                        "requires_kernel_header = false")
+    # _Start: text_offset = FD_BASE at 8, image_size = FD_SIZE at 16, "ARM\x64" at 56.
+    # mkbootimg never writes those -- its boot header is the image's first page, outside
+    # the kernel blob -- so this flag is Mu's way of showing the loader those fields,
+    # and on clover the loader turns out to look: round 6 set it false, changing nothing
+    # but bytes 8..63, and the tablet flashed the Mi logo and fell back to fastboot,
+    # where every header-true build sat on the logo.  text_offset = 0x9fc00000 is not a
+    # value the arm64 boot protocol permits, so this header is an abuse -- but it is an
+    # abuse this ABL accepts and the alternative it does not.
+    if not shim.get("requires_kernel_header"):
+        problems.append("clover.toml [boot_shim] requires_kernel_header is off: measured on "
+                        "this unit (round 6), ABL then flashes the splash and falls back to "
+                        "fastboot instead of loading the image")
+    # This overlay now ships its own copy of upstream BootShim/BootShim.S with a
+    # liveness probe: it paints ABL's already-live splash framebuffer before it
+    # relocates the firmware volume, because a logo cannot distinguish "our code ran
+    # and drew nothing" from "the loader never jumped to us".  A probe aimed at the
+    # wrong window is worse than no probe -- it either never shows or scribbles over
+    # memory the running loader still uses -- so bind it to the same map row every
+    # other board number in this file is checked against.
+    probe = REPO / "BootShim" / "BootShim.S"
+    if probe.is_file():
+        text = probe.read_text()
+        got = re.search(r"\.equ\s+SPLASH_BASE,\s*(0x[0-9a-fA-F]+)", text)
+        fill = re.search(r"\.equ\s+SPLASH_FILL,\s*(0x[0-9a-fA-F]+)", text)
+        row = map_rows.get("Display Reserved") if map_rows else None
+        if got is None or fill is None:
+            problems.append("BootShim/BootShim.S carries the probe but no .equ "
+                            "SPLASH_BASE/SPLASH_FILL for the checker to bind")
+        elif row is None:
+            warnings.append("BootShim probe is present but MemoryMapLib has no "
+                            "'Display Reserved' row to validate it against")
+        else:
+            base, span = int(got.group(1), 0), int(fill.group(1), 0)
+            if base != row[0]:
+                problems.append(f"BootShim/BootShim.S paints {base:#x}, but MemoryMapLib "
+                                f"starts 'Display Reserved' at {row[0]:#x}")
+            elif base + span > row[0] + row[1]:
+                problems.append(f"BootShim/BootShim.S paints {span:#x} bytes from "
+                                f"{base:#x}, past the end of 'Display Reserved' at "
+                                f"{row[0] + row[1]:#x}")
+            else:
+                note("*", f"BootShim splash probe covers {base:#x}+{span:#x}, inside "
+                          f"'Display Reserved' {row[0]:#x}+{row[1]:#x}")
     if kernel.get("append_dtb") and not (REPO / "Resources" / "DTBs" / "clover.dtb").is_file():
         # Only the standalone `build_uefi.py -d clover` path reads this; the UniXNU
         # path never calls build_uefi.py and packs its own Apple device tree.  A

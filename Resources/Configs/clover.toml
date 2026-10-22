@@ -9,27 +9,26 @@
 #
 # Boot Shim Configs
 #
-# false, which is also build_uefi.py's own default.  BootShim.S emits the arm64
-# Linux image header when this is true: .quad FD_BASE at offset 8 (text_offset) and
-# .quad FD_SIZE at 16 (image_size), "ARM\x64" at 56.  A real arm64 loader reads those
-# fields, and text_offset = 0x9fc00000 is not a legal value for it -- the protocol
-# wants a small, page-aligned offset -- so a strict ABL either rejects the image or
-# uses the size it was handed.  mkbootimg does not write this header (its own boot
-# header is the image's first page, outside the kernel blob), so the flag is purely a
-# choice about whether the loader is invited to parse those fields at all.
+# true, as every upstream Mu device sets it.  BootShim.S emits an arm64 Linux image
+# header when this is on: .quad FD_BASE at offset 8 (text_offset), .quad FD_SIZE at 16
+# (image_size), "ARM\x64" at 56.  text_offset = 0x9fc00000 is not a legal value per the
+# arm64 boot protocol, which wants a small page-aligned offset -- but round 6 measured
+# what happens without the header and the answer was worse: the Mi logo flashed for a
+# moment and the tablet went straight back to fastboot, where with the header the logo
+# stayed.  Those two builds differ only in bytes 8..63 of the kernel blob, so this ABL
+# does look at those bytes, and it is the loader that gets to decide what they mean.
+# mkbootimg never writes this header (its own boot header is the image's first page,
+# outside the kernel blob), so the flag is purely Mu's way of showing ABL the fields.
 #
-# Set on the evidence, not on a measured difference: rounds 1, 4 and 5 (gzip, then
-# uncompressed) all froze the same way -- the Mi logo drawn by ABL, nothing taking
-# over -- so compression is eliminated but the header's effect was never isolated.
-# This is the cheapest remaining variable; if it too changes nothing, the next suspect
-# is the FD landing at 0x9FC00000 under the loader that is still running there.  Every
-# upstream Mu device sets this true, but they are all header v1 or newer ABLs, and this
-# unit is v0.  check-clover-uefi.py guards the interaction: requires_kernel_header =
-# true with kernel_compression = "none" hands the loader a live ARM\x64 magic whose
-# text_offset is FD_BASE, and asks for one or the other instead.
+# Unresolved, and deliberately not smoothed over: the gzip builds (rounds 1 and 4) had
+# no ARM\x64 magic either -- offset 56 held compressed bytes -- yet they froze on the
+# logo like round 5 instead of bailing like round 6.  So "the magic is what makes ABL
+# boot us" explains three of four observations, not four.  The way to stop reading a
+# logo as a status light is the BootShim splash probe this overlay now carries; it
+# paints ABL's live framebuffer before touching the firmware volume.
 #
 [boot_shim]
-requires_kernel_header = false
+requires_kernel_header = true
 
 #
 # UEFI FD Configs

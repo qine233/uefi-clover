@@ -12,6 +12,7 @@ Mapping applied:
     Platforms/Xiaomi/cloverPkg/**  ->  Platforms/Xiaomi/cloverPkg/**
     Resources/Configs/clover.toml  ->  Resources/Configs/clover.toml
     Resources/DTBs/clover.dtb      ->  Resources/DTBs/clover.dtb
+    BootShim/BootShim.S            ->  BootShim/BootShim.S   (replaces an upstream file)
     proprietary-files.txt          ->  Platforms/Xiaomi/cloverPkg/proprietary-files.txt
 
 Everything else in this repository (scripts/, README.md, LICENSE) is overlay
@@ -40,7 +41,12 @@ PKG_REL = pathlib.Path("Platforms/Xiaomi/cloverPkg")
 # Resources/DTBs/<device>.dtb to the UEFI FD when it writes the android kernel.
 COPIED = [PKG_REL, pathlib.Path("Resources/Configs/clover.toml"),
           pathlib.Path("Resources/DTBs/clover.dtb"),
-          pathlib.Path("Resources/DTBs/clover.dts")]
+          pathlib.Path("Resources/DTBs/clover.dts"),
+          # A second copy of an upstream file, on purpose: BootShim is the only
+          # code that runs before anything in the firmware volume, so it is the
+          # only place a "did ABL jump to us at all" probe can live.  See the
+          # header comment in the file itself for what it does and how to remove it.
+          pathlib.Path("BootShim/BootShim.S")]
 
 DOC = pathlib.Path("proprietary-files.txt")
 

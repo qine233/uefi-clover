@@ -101,26 +101,30 @@ APRIORI 条目启动时不评估 depex，所以它不依赖任何厂商 blob。
 
 - **红**：`BootShim` 在拷贝固件之前先把 ABL 正在扫描的整段窗口涂红。红色出现，
   说明 ABL 确实跳进了我们的镜像。
-- **品红**：`CloverLadderEarly` 在 `APRIORI.inc` 里紧跟 Pcd 之后，它被派发就说明
-  DXE dispatcher 已经进入 APRIORI 列表。
-- **黄**：`CloverLadderLate` 紧跟在 `ClockDxe` 之后 —— 黄色说明 `ClockDxe`
-  返回了，历史上它正是卡死的地方。
-- **绿**：`CloverGopDxe` 发布 GOP 之后整屏涂绿，`GraphicsConsoleDxe` 也就能起来。
+- **品红**：`CloverLadderEarly` 在 `APRIORI.inc` 第 23 行、紧跟 Pcd 之后，它被派发
+  就说明 DXE dispatcher 已经进入 APRIORI 列表。
+- **青**：`CloverLadderLate` 在第 56 行、紧跟 `ClockDxe` 之后 —— 青色说明
+  `ClockDxe` 返回了。
+- **黄**：`CloverLadderBds` 在第 79 行、`BdsDxe` 之前 —— 黄色说明上面的存储和
+  variable 一整块（DiskIo 到 HiiDatabase）都返回了。
+- **绿**：`CloverGopDxe`（第 122 行）发布 GOP 之后整屏涂绿，`GraphicsConsoleDxe`
+  也就能起来。
 
 UniXNU 菜单会盖掉绿色。于是：
 
 | 屏幕 | 含义 |
 | --- | --- |
 | 一直停在 Mi 标志 | ABL 没有跳进 BootShim（镜像/启动流程问题），或一进去就挂了 |
-| 红色 | DXE dispatcher 没走到 APRIORI 第 23 行：更早的 SEC/PEI 或 Pcd 之前出了问题 |
-| 品红 | 调度在第 24～52 行之间停住：`EnvDxe`、各 arch 驱动、Qcom blob，或 `ClockDxe` 自己 |
-| 黄色 | `ClockDxe` 已返回，卡点在第 53～116 行之间（存储、console、BDS 之后） |
+| 红色 | DXE dispatcher 没走到 APRIORI 第 23 行：问题在 SEC/PEI 或 Pcd 之前 |
+| 品红 | 卡在第 24～52 行：`EnvDxe`、各 arch 驱动、Qcom blob，或 `ClockDxe` 自己 |
+| 青 | `ClockDxe` 已返回，卡在第 53～78 行：`DiskIo`、`Partition`、`SdccDxe`、`Fat`、`Variable`、`RTC`、`HiiDatabase` 这一段 |
+| 黄 | 存储和 variable 都过了，卡在第 80～121 行：TLMM 到 RNG 的厂商尾巴，或 console 栈 |
 | 绿色 | GOP 已发布，问题在 BDS 之后：UniXNU 的启动项、payload 或应用本身 |
 | 菜单 | Stage 1 达成 |
 
-BDS 本身不单独给一个颜色：`BdsDxe` 在 `APRIORI.inc` 第 76 行，远早于
-`CloverGopDxe`，而这个 DXE 核的 `CoreRegisterProtocolNotify` 不会为已存在的协议
-触发回调，所以那样的通知只在协议被重装时才响，正常路径上永远不亮。
+`BdsDxe` 自己进入 BDS 阶段不给颜色：它在这个 DXE 核里装的是 arch protocol，而
+`CoreRegisterProtocolNotify` 不会为已存在的协议触发回调，那样的通知只在协议被
+重装时才响，正常路径上永远不亮。黄色只说明它前面的驱动都返回了。
 
 ## ClockDxe 为什么要打补丁
 

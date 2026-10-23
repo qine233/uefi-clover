@@ -73,6 +73,11 @@ APRIORI DXE {
   INF MdeModulePkg/Universal/DevicePathDxe/DevicePathDxe.inf
   INF MdeModulePkg/Universal/CapsuleRuntimeDxe/CapsuleRuntimeDxe.inf
   INF MdeModulePkg/Universal/HiiDatabaseDxe/HiiDatabaseDxe.inf
+
+  # Third rung: yellow once the storage and variable block above has returned,
+  # just before BdsDxe.  Position is the message.
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverLadderBds.inf
+
   INF MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
 
   INF Binaries/clover/QcomPkg/Drivers/TLMMDxe/TLMMDxe.inf

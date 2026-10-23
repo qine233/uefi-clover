@@ -1,9 +1,9 @@
 ##
-#  clover: the second rung of the DXE ladder -- painted on the panel when the
+#  clover: the second rung of the DXE ladder -- cyan on the panel when the
 #  driver right after ClockDxe is dispatched, i.e. when ClockDxe has returned.
 #
 #  It installs nothing; the fill is the whole driver.  See CloverLadderDxe.c for
-#  the colour table and CloverLadderEarly.inf for the first mark.
+#  the colour table.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##

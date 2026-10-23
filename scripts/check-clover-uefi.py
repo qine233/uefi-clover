@@ -778,28 +778,32 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
                             + ", ".join(absent)
                             + "; the FDF alone does not build a module")
 
-    # The two ladder marks mean nothing without their positions: the first has to
-    # sit above ClockDxe and the second immediately below it, because a mark only
-    # says "the dispatcher got this far".
+    # The ladder marks mean nothing without their positions: a mark only says
+    # "the dispatcher got this far", so the first has to sit above ClockDxe, the
+    # second immediately below it, and the third just above BdsDxe.
     apriori = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "Include" / "APRIORI.inc"
     if apriori.is_file():
         lines = apriori.read_text().splitlines()
-        early = next((i for i, line in enumerate(lines)
-                      if "CloverLadderEarly.inf" in line), None)
-        clock = next((i for i, line in enumerate(lines)
-                      if "ClockDxe/ClockDxe.inf" in line), None)
-        late = next((i for i, line in enumerate(lines)
-                     if "CloverLadderLate.inf" in line), None)
-        if early is None or clock is None or late is None:
-            problems.append("APRIORI.inc lost one of the CloverLadderDxe marks or ClockDxe; "
-                            "the panel colours no longer bracket dispatch")
-        elif not (early < clock < late):
-            problems.append("APRIORI.inc puts the ladder marks on the wrong side of "
-                            "ClockDxe; CloverLadderEarly must precede it and "
-                            "CloverLadderLate must follow it")
+
+        def mark(name):
+            return next((i for i, line in enumerate(lines) if name in line), None)
+
+        early = mark("CloverLadderEarly.inf")
+        clock = mark("ClockDxe/ClockDxe.inf")
+        late = mark("CloverLadderLate.inf")
+        bds = mark("CloverLadderBds.inf")
+        bds_dxe = mark("Universal/BdsDxe/BdsDxe.inf")
+        marks = (early, late, bds, clock, bds_dxe)
+        if any(position is None for position in marks):
+            problems.append("APRIORI.inc lost one of the CloverLadderDxe marks, ClockDxe "
+                            "or BdsDxe; the panel colours no longer cut dispatch")
+        elif not (early < clock < late < bds < bds_dxe):
+            problems.append("APRIORI.inc puts the ladder marks in the wrong slots; the "
+                            "order must be Early, ClockDxe, Late, Bds, BdsDxe")
         else:
-            note("*", "APRIORI.inc brackets ClockDxe with the ladder marks (lines "
-                      f"{early + 1} and {late + 1})")
+            note("*", "APRIORI.inc places the ladder marks at lines "
+                      f"{early + 1}, {late + 1}, {bds + 1} (ClockDxe {clock + 1}, "
+                      f"BdsDxe {bds_dxe + 1})")
 
         # APRIORI DXE { } only orders drivers; it does not put a file in the
         # volume.  A module named there but not in DXE.inc compiles and never

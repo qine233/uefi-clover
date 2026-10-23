@@ -1,0 +1,36 @@
+##
+#  clover: the third rung of the DXE ladder -- yellow on the panel just above
+#  BdsDxe, so the colour says whether the whole storage and variable block
+#  (DiskIo through HiiDatabase) returned.
+#
+#  It installs nothing; the fill is the whole driver.  See CloverLadderDxe.c for
+#  the colour table.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = CloverLadderBds
+  FILE_GUID                      = C7D3F0A2-8B14-4C6E-A5D9-2E71B4C908F5
+  MODULE_TYPE                    = UEFI_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = CloverLadderDxeEntry
+
+[Sources]
+  CloverLadderDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  BaseMemoryLib
+  DebugLib
+
+[BuildOptions]
+  *_*_*_CC_FLAGS = -DCLOVER_LADDER_BDS
+
+[Depex]
+  TRUE

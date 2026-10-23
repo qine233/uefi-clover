@@ -126,12 +126,14 @@
   cloverPkg/Drivers/CloverGopDxe/CloverGopDxe.inf
 
   #
-  # Two whole-panel marks that bracket DXE dispatch: the first right after Pcd,
-  # the second right after ClockDxe.  They install nothing and exist only to
-  # say how far the dispatcher got; see CloverLadderDxe.c.
+  # Whole-panel marks that cut DXE dispatch into thirds: the first right after
+  # Pcd, the second right after ClockDxe, the third just above BdsDxe.  They
+  # install nothing and exist only to say how far the dispatcher got; see
+  # CloverLadderDxe.c.
   #
   cloverPkg/Drivers/CloverLadderDxe/CloverLadderEarly.inf
   cloverPkg/Drivers/CloverLadderDxe/CloverLadderLate.inf
+  cloverPkg/Drivers/CloverLadderDxe/CloverLadderBds.inf
 
   #
   # ACPI Tables. Silicium-ACPI has no clover board directory yet, so no tables

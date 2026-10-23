@@ -1,6 +1,9 @@
 /*
- * Overlay copy of upstream Mu-Silicium BootShim/BootShim.S, with one addition: a
- * bring-up probe at the top of _Start.
+ * Overlay copy of upstream Mu-Silicium BootShim/BootShim.S, with two changes: a
+ * bring-up probe at the top of _Start, and an ARM64 Image Size that covers the shim
+ * as well as the firmware volume.  Upstream writes FD_SIZE alone; the UniXNU boot
+ * image step checks the header against the bytes it actually puts in the kernel
+ * field, and the boot-chain contract says the header describes the pair.
  *
  * Every on-device round up to eight was read off ABL's logo, and the logo cannot
  * answer the only question that matters: did ABL jump to us at all?  A frozen Mi
@@ -52,7 +55,7 @@ _StackBase:
   .quad FD_BASE         /* Text Offset */
 
 _StackSize:
-  .quad FD_SIZE         /* Image Size */
+  .quad FD_SIZE + (_Payload - _Head)   /* Image Size: the shim and the volume it carries */
   .quad 0               /* Flags */
   .quad 0               /* Reserved */
   .quad 0               /* Reserved */

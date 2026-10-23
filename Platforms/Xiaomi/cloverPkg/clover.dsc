@@ -126,6 +126,14 @@
   cloverPkg/Drivers/CloverGopDxe/CloverGopDxe.inf
 
   #
+  # Two whole-panel marks that bracket DXE dispatch: the first right after Pcd,
+  # the second right after ClockDxe.  They install nothing and exist only to
+  # say how far the dispatcher got; see CloverLadderDxe.c.
+  #
+  cloverPkg/Drivers/CloverLadderDxe/CloverLadderEarly.inf
+  cloverPkg/Drivers/CloverLadderDxe/CloverLadderLate.inf
+
+  #
   # ACPI Tables. Silicium-ACPI has no clover board directory yet, so no tables
   # are compiled; gta4l leaves the same line commented out for that reason.
   #

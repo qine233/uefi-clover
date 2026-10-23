@@ -778,6 +778,43 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
                             + ", ".join(absent)
                             + "; the FDF alone does not build a module")
 
+    # The two ladder marks mean nothing without their positions: the first has to
+    # sit above ClockDxe and the second immediately below it, because a mark only
+    # says "the dispatcher got this far".
+    apriori = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "Include" / "APRIORI.inc"
+    if apriori.is_file():
+        lines = apriori.read_text().splitlines()
+        early = next((i for i, line in enumerate(lines)
+                      if "CloverLadderEarly.inf" in line), None)
+        clock = next((i for i, line in enumerate(lines)
+                      if "ClockDxe/ClockDxe.inf" in line), None)
+        late = next((i for i, line in enumerate(lines)
+                     if "CloverLadderLate.inf" in line), None)
+        if early is None or clock is None or late is None:
+            problems.append("APRIORI.inc lost one of the CloverLadderDxe marks or ClockDxe; "
+                            "the panel colours no longer bracket dispatch")
+        elif not (early < clock < late):
+            problems.append("APRIORI.inc puts the ladder marks on the wrong side of "
+                            "ClockDxe; CloverLadderEarly must precede it and "
+                            "CloverLadderLate must follow it")
+        else:
+            note("*", "APRIORI.inc brackets ClockDxe with the ladder marks (lines "
+                      f"{early + 1} and {late + 1})")
+
+        # APRIORI DXE { } only orders drivers; it does not put a file in the
+        # volume.  A module named there but not in DXE.inc compiles and never
+        # ships -- measured, when the first ladder build produced an FV without
+        # the two marks.
+        dxe = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "Include" / "DXE.inc"
+        if dxe.is_file():
+            apriori_infs = set(re.findall(r"INF\s+(cloverPkg/\S+\.inf)", apriori.read_text()))
+            dxe_infs = set(re.findall(r"INF\s+(cloverPkg/\S+\.inf)", dxe.read_text()))
+            missing = sorted(apriori_infs - dxe_infs)
+            if missing:
+                problems.append("APRIORI.inc orders " + ", ".join(missing)
+                                + " but DXE.inc does not contain it, so it never "
+                                "reaches the firmware volume")
+
     if kernel.get("append_dtb") and not (REPO / "Resources" / "DTBs" / "clover.dtb").is_file():
         # Only the standalone `build_uefi.py -d clover` path reads this; the UniXNU
         # path never calls build_uefi.py and packs its own Apple device tree.  A

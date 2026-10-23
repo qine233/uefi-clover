@@ -1,0 +1,35 @@
+##
+#  clover: the first rung of the DXE ladder -- painted on the panel as soon as
+#  the dispatcher reaches the top of APRIORI, right after Pcd.
+#
+#  It installs nothing; the fill is the whole driver.  See CloverLadderDxe.c for
+#  the colour table and CloverLadderLate.inf for the mark after ClockDxe.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = CloverLadderEarly
+  FILE_GUID                      = 5A1C7E60-3B2D-4E8F-9C41-7D6E2A8B0F13
+  MODULE_TYPE                    = UEFI_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = CloverLadderDxeEntry
+
+[Sources]
+  CloverLadderDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  BaseMemoryLib
+  DebugLib
+
+[BuildOptions]
+  *_*_*_CC_FLAGS = -DCLOVER_LADDER_EARLY
+
+[Depex]
+  TRUE

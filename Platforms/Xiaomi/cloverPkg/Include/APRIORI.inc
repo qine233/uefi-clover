@@ -18,6 +18,10 @@ APRIORI DXE {
   INF MdeModulePkg/Core/Dxe/DxeMain.inf
   INF MdeModulePkg/Universal/PCD/Dxe/Pcd.inf
 
+  # First rung of the DXE ladder: magenta on the panel once the dispatcher is
+  # in the APRIORI list at all.  It has to stay above ClockDxe.
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverLadderEarly.inf
+
   INF Binaries/clover/QcomPkg/Drivers/EnvDxe/EnvDxe.inf
 
   INF MdeModulePkg/Universal/ReportStatusCodeRouter/RuntimeDxe/ReportStatusCodeRouterRuntimeDxe.inf
@@ -46,6 +50,10 @@ APRIORI DXE {
   # userdata live on never appear.
   #
   INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
+
+  # Second rung: yellow once ClockDxe has returned.  Its position alone carries
+  # the meaning, so it stays immediately below ClockDxe.
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverLadderLate.inf
 
   INF MdeModulePkg/Universal/Disk/DiskIoDxe/DiskIoDxe.inf
   INF MdeModulePkg/Universal/Disk/PartitionDxe/PartitionDxe.inf

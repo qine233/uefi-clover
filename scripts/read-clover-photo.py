@@ -5,38 +5,44 @@ The only output channel this unit has is the panel, and since round 13 the ladde
 positional: CheckpointDxe paints every band black at its own entry and recolours a slot
 when the protocol it names exists.  What a boot answers is "which is the first dark
 band", and since round 14 there is a second reading below the slots -- seven yellow bands
-carrying the firmware volume file index of the last image the DXE core loaded.  Neither
-is something that can be described aloud, so the reading comes from a photo.
+carrying the firmware volume file index of the last image the DXE core loaded, and since
+round 15 three marks under them saying whether that number is live.  None of it is
+something that can be described aloud, so the reading comes from a photo.
 
-  1. the frame is resampled and every row given a majority colour.  Bright runs are the
-     lit bands.  An empty slot keeps the black the entry point painted, which in a photo
-     is only a dip in how blue the row looks, and a camera vignette dips the same way, so
-     those dips are printed for a human to cross-check (--debug) and are never scored.
-     The rows are read from a narrow vertical strip, not across the screen: a band is a
-     straight line on the panel but a slanted one in a hand-held photo, and round 14's
-     frame slants by tens of rows from edge to edge, so sampling six-tenths of the width
-     mixes the band into the gap beside it and no row ever wins a majority.
-  2. rows are mapped back to framebuffer offsets through a projective fit rather than a
-     linear one.  A photo of a panel taken at an angle squeezes the far end: round 13's
-     frame is 18.5 rows per band pitch at the top and 21 to 24 at the bottom, which by
-     the last third of the ladder is a whole band of error -- enough to name the wrong
-     module.  The green and magenta stages fix two anchors, and what is left is searched:
-     the fit kept is the one that puts the detected bands on slot centres and makes their
-     colours agree with the driver's own table.
-  3. the seven index bands are then sampled at the rows the fit predicts for them and
-     decoded most-sign-bit-first, with the run detection printed alongside as a check,
-     and the three mark bands under them are printed last: they say whether that number
-     is live or whether the meter simply never matched a file to a load.
+  1. the frame is turned so that the ladder runs top to bottom.  On the panel the bars are
+     stripes across the short axis, so a tablet lying on a desk and photographed the way a
+     phone is held puts them across the long one -- round 15's frame did.  Every
+     orientation is tried and the one that explains the most bands wins, which means the
+     photo can be sent exactly as it came out of the phone.
+  2. the frame is resampled and every row given a majority colour, inside a narrow
+     vertical strip rather than across the screen: a band is a straight line on the panel
+     but a slanted one in a hand-held photo, and round 14's frame slants by tens of rows
+     from edge to edge, so averaging over six-tenths of the width mixes each band into the
+     gap beside it and no row ever wins a majority.
+  3. the bands are lined up with the driver's table.  What makes this reliable is that the
+     entry-point black pass paints the slots that never lit as well: a dark band is a
+     *marked position* on the ladder rather than an absence, so the black runs are used as
+     evidence for the geometry exactly like the coloured ones.  Round 14 fitted only the
+     lit runs against a colour column and could land one band out; round 15's frame has
+     twenty-six consecutive bands, lit and black together, and they pin the spacing by
+     themselves.  The spacing is not constant -- across a hand-held frame the pitch grows
+     by about a tenth of a band from the top of the ladder to the bottom -- so the model
+     is row = green + p0 * (n + g*n*(n-1)/2), n being pitches below the green stage, p0
+     fixed by the magenta anchor and the growth g searched.
+  4. every band is then read twice, once from the run it belongs to and once at the row
+     the geometry predicts for its offset, and both are printed, so a fit that had drifted
+     shows up as the two columns disagreeing rather than as a confident wrong name.
 
 All three tables are parsed from CheckpointDxe.c, so the script cannot drift out of sync
 with the firmware, and the ladder position of every band is derived from its offset rather
 than from the order the tables appear in.
 
-Usage:  scripts/read-clover-photo.py /path/to/photo.jpeg [--width 600]
+Usage:  scripts/read-clover-photo.py /path/to/photo.jpeg [--width 600] [--rotate 90]
         [--center 0.50] [--span 0.12] [--modules fv-order.txt] [--debug]
 """
 
 import argparse
+import math
 import re
 import struct
 import subprocess
@@ -61,6 +67,12 @@ NAME_BY_COLOR = {
     "CLOVER_COLOR_BLACK": "black",
 }
 LIT = ("yellow", "cyan", "red", "white")
+# The stage bands are not in the table; they are what the geometry is anchored to, and
+# the only two of them that can be identified before the fit is known.
+STAGES = {-4: "green", -2: "magenta"}
+# A slot the entry point painted and nothing recoloured is a band like any other, and the
+# camera shows it as a short dark run between two stretches of the blue BootShim fill.
+BAND = set(LIT) | {"green", "magenta", "black"}
 
 
 def classify(r, g, b):
@@ -87,12 +99,25 @@ def classify(r, g, b):
     return "background"
 
 
-def load(src, width):
-    """Return (grid, height, width); grid[row][col] is (r, g, b), top row first."""
+def load(src, width, rotate=0):
+    """Return (grid, height, width); grid[row][col] is (r, g, b), top row first.
+
+    sips turns the frame before resampling it, into a temporary copy.  Everything below
+    reads the picture only through this function, so asking for an orientation here is what
+    lets the row and column fractions mean the same thing however the photo was held.
+    """
     with tempfile.TemporaryDirectory() as tmp:
+        cur = Path(src)
+        if rotate:
+            turned = Path(tmp) / "turned.png"
+            subprocess.run(
+                ["sips", "--rotate", str(rotate), str(src), "--out", str(turned)],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            cur = turned
         bmp = Path(tmp) / "frame.bmp"
         subprocess.run(
-            ["sips", "-s", "format", "bmp", "--resampleWidth", str(width), str(src),
+            ["sips", "-s", "format", "bmp", "--resampleWidth", str(width), str(cur),
              "--out", str(bmp)],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
@@ -178,30 +203,60 @@ def ranges(rowcls, keep):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("photo")
-    ap.add_argument("--width", type=int, default=600)
-    ap.add_argument("--center", type=float, default=0.50,
-                    help="where across the frame to read the bands, as a fraction of the width")
-    ap.add_argument("--span", type=float, default=0.12,
-                    help="how wide that reading strip is, as a fraction of the width")
-    ap.add_argument("--driver", default=str(DRIVER))
-    ap.add_argument("--modules", help="text file of scripts/fv-order.py output, to name the "
-                                      "index the bit bands decode to")
-    ap.add_argument("--debug", action="store_true")
-    a = ap.parse_args()
+def read_strip(grid, h, w, center, span):
+    """Majority colour of each row inside a narrow strip, plus how blue each row is.
 
-    slot_rows = slots(Path(a.driver))
-    bit_rows = bits(Path(a.driver))
-    mark_rows = marks(Path(a.driver))
+    Only a slice of the frame: the bezel, the desk and the fastboot footer are not part of
+    the ladder, and a band slanted across the frame has to be crossed at one place rather
+    than averaged over.
+    """
+    cols = [int((center - span / 2.0) * w + i * (span * w) / 29.0) for i in range(30)]
+    cols = [min(max(c, 0), w - 1) for c in cols]
+    classes, blue = [], []
+    for y in range(h):
+        px = [grid[y][x] for x in cols]
+        blue.append(sum(b - (r + g) / 2.0 for r, g, b in px) / len(px))
+        votes = {}
+        for r, g, b in px:
+            c = classify(r, g, b)
+            votes[c] = votes.get(c, 0) + 1
+        best = max(votes, key=votes.get)
+        classes.append(best if votes[best] * 2 >= len(px) else "mixed")
+    return classes, blue
 
-    # Band numbers come from the offsets, not from the order the three tables happen to
-    # be written in: slot 0 is the first protocol band and every band below it sits one
-    # pitch lower, so a band inserted in the middle moves the rest instead of quietly
-    # mislabelling the photograph.  All three tables share the ladder this way, which is
-    # also what lets the fit use a lit mark or a lit index bit as evidence for its
-    # geometry exactly as it uses a lit protocol slot.
+
+def anchors_of(classes):
+    found = {}
+    for c, lo, hi in ranges(classes, {"green", "magenta"}):
+        if hi - lo >= 1:
+            found.setdefault(c, (lo + hi) / 2.0)
+    return found
+
+
+def bands_of(classes):
+    """Every band in the frame, lit or painted black, as (centre row, colour).
+
+    The height window is what keeps the reading honest: a band is half a pitch, so a run
+    one or two rows tall is slant noise at an edge and a run of sixty is the bezel or the
+    black outside the panel.  Neither belongs on the ladder.
+    """
+    out = []
+    for c, lo, hi in ranges(classes, BAND):
+        if 3 <= hi - lo + 1 <= 40:
+            out.append(((lo + hi) / 2.0, c))
+    return out
+
+
+def build_ladder(driver):
+    """Number the bands from their offsets, for all three tables at once: slot 0 is the
+    first protocol band and every band below it sits one pitch lower, so a band inserted in
+    the middle moves the rest instead of quietly mislabelling the photograph.  This is also
+    what lets the fit use a lit mark or a lit index bit as evidence for its geometry
+    exactly as it uses a lit protocol slot.
+    """
+    slot_rows = slots(Path(driver))
+    bit_rows = bits(Path(driver))
+    mark_rows = marks(Path(driver))
     pitch = slot_rows[1]["off"] - slot_rows[0]["off"]
     base = slot_rows[0]["off"]
     ladder = {}
@@ -217,163 +272,292 @@ def main():
             ladder[index] = {"kind": kind, "off": entry["off"],
                              "want": forced or entry["want"], "name": entry["name"],
                              "bit": entry.get("bit")}
+    return ladder, pitch
 
-    grid, h, w = load(Path(a.photo), a.width)
 
-    def read_strip(center, span):
-        """Majority colour of each row inside a narrow strip, plus how blue each row is.
+def quad_fit(points):
+    """Least squares for row = A + B*i + C*i**2 over (i, row) pairs, without a numerics
+    dependency: three normal equations, solved by hand."""
+    n = 3
+    x = [[1.0 * i ** k for k in range(n)] for i, _row in points]
+    y = [float(row) for _i, row in points]
+    m = [[sum(x[j][r] * x[j][c] for j in range(len(x))) for c in range(n)] for r in range(n)]
+    v = [sum(x[j][r] * y[j] for j in range(len(x))) for r in range(n)]
+    for r in range(n):
+        p = max(range(r, n), key=lambda q: abs(m[q][r]))
+        if abs(m[p][r]) < 1e-9:
+            return None
+        m[r], m[p] = m[p], m[r]
+        v[r], v[p] = v[p], v[r]
+        for q in range(r + 1, n):
+            f = m[q][r] / m[r][r]
+            for c in range(r, n):
+                m[q][c] -= f * m[r][c]
+            v[q] -= f * v[r]
+    sol = [0.0] * n
+    for r in range(n - 1, -1, -1):
+        sol[r] = (v[r] - sum(m[r][c] * sol[c] for c in range(r + 1, n))) / m[r][r]
+    return sol
 
-        Only the middle of the frame by default: the bezel, the desk and the Android
-        footer are not part of the ladder.
-        """
-        cols = [int((center - span / 2.0) * w + i * (span * w) / 29.0) for i in range(30)]
-        cols = [min(max(c, 0), w - 1) for c in cols]
-        classes, blue = [], []
-        for y in range(h):
-            px = [grid[y][x] for x in cols]
-            blue.append(sum(b - (r + g) / 2.0 for r, g, b in px) / len(px))
-            votes = {}
-            for r, g, b in px:
-                c = classify(r, g, b)
-                votes[c] = votes.get(c, 0) + 1
-            best = max(votes, key=votes.get)
-            classes.append(best if votes[best] * 2 >= len(px) else "mixed")
-        return classes, blue
 
-    def anchors_of(classes):
-        found = {}
-        for c, lo, hi in ranges(classes, {"green", "magenta"}):
-            if hi - lo >= 1:
-                found.setdefault(c, (lo + hi) / 2.0)
-        return found
+def assign(bands, index_of):
+    """Claim a ladder index for every band under this geometry.
 
-    # If the requested strip lands on the bezel or on a reflection, the anchors simply
-    # are not there; slide across the panel a little at a time rather than giving up,
-    # because a hand-held frame can put the ladder anywhere in it.
-    rowcls, blueness, anchors = None, None, {}
-    for center in [a.center] + [c for c in (0.50, 0.42, 0.58, 0.34, 0.66) if c != a.center]:
-        rowcls, blueness = read_strip(center, a.span)
-        anchors = anchors_of(rowcls)
-        if "green" in anchors and "magenta" in anchors:
-            if center != a.center:
-                print("read from a strip centred at %.2f of the width, not %.2f" %
-                      (center, a.center))
-            break
-    if "green" not in anchors or "magenta" not in anchors:
-        raise SystemExit("no green and magenta bands in this frame: the ladder never reached "
-                         "CheckpointDxe, so there is nothing to line the rest up against (or "
-                         "every reading strip fell on the bezel -- try --center, with --debug "
-                         "to see what the rows looked like)")
+    Two runs can round to the same index -- a band whose edge the row classifier cut in
+    two, or a shadow the entry point's black pass imitates -- and then the coloured band
+    wins and the closer claim beats the further one, because a band named by its colour is
+    the evidence while a dark run only marks a position.  Round 14's frame does this: it
+    reads cleanly with the coloured bands alone and rejects every candidate geometry as
+    soon as one dark run overlaps a lit one, which is why a collision drops a band here
+    instead of dropping the fit.
+
+    Bands above the slots are the stage bands, and only the two anchors among them are
+    kept: a dark run sitting above the green stage is the desk, not a ladder position.
+    """
+    claims = []
+    for y, col in bands:
+        i = index_of(y)
+        if i is None:
+            continue
+        r = int(round(i))
+        if r < 0 and STAGES.get(r) != col:
+            continue
+        claims.append((col == "black", abs(i - r), y, col, float(i), r))
+    claims.sort()
+    rows, taken = [], set()
+    for _dark, _dev, y, col, i, r in claims:
+        if r in taken:
+            continue
+        taken.add(r)
+        rows.append((y, col, i, r))
+    rows.sort()
+    return rows
+
+
+def score_of(rows, ladder):
+    """How well a placement explains the frame: a band on the slot whose colour it has is
+    worth three, one the entry point painted black is worth two because it is still a band
+    in the right place, and being off centre by a fraction of a pitch costs six apiece --
+    which is what keeps a fit that slid by a whole band from winning on colour alone."""
+    score = 0.0
+    for _y, c, i, r in rows:
+        if r < 0:
+            continue
+        want = ladder.get(r)
+        if want is None:
+            score -= 3.0
+        elif c == want["want"]:
+            score += 3.0
+        elif c == "black":
+            score += 2.0
+        else:
+            score -= 2.0
+        score -= 6.0 * abs(i - r)
+    return score
+
+
+def model_coef(yg, p0, g):
+    """The search's model, row = yg + p0 * (n + g*n*(n-1)/2) for n pitches below green,
+    written in the same i-squared form the refinement uses, so one row_of() serves both."""
+    return (yg + p0 * (4.0 + 6.0 * g), p0 * (1.0 + 3.5 * g), p0 * g / 2.0)
+
+
+def quad_index(coef):
+    """Invert row = A + B i + C i^2, taking the root nearest the straight-line answer.
+
+    The sign of C decides which of the two roots is the real one, and picking by the
+    quadratic formula's plus sign gets it wrong for a frame whose pitch shrinks: round 15's
+    first refinement landed on the far branch, fitted a parabola that turned over halfway
+    down the ladder, and reported six bands out of twenty-nine.
+    """
+    a, b, c = coef
+
+    def index_of(y):
+        if abs(c) < 1e-9:
+            return None if abs(b) < 1e-9 else (y - a) / b
+        disc = b * b - 4.0 * c * (a - y)
+        if disc < 0:
+            return None
+        root = math.sqrt(disc)
+        guess = (y - a) / b if abs(b) > 1e-9 else 0.0
+        return min(((-b + root) / (2.0 * c), (-b - root) / (2.0 * c)),
+                   key=lambda v: abs(v - guess))
+    return index_of
+
+
+def fit(deg, center, h, w, rowcls, anchors, ladder):
+    """Line the frame's bands up with the table.  Returns (score, rows, geometry) or None.
+
+    The starting geometry comes from a model, row = green + p0 * (n + g*n*(n-1)/2) with n
+    the pitches below the green stage: the first term is a constant pitch and the second
+    lets it grow down the frame, which is what a photo of a panel that is not square to the
+    camera does.  p0 is set by the magenta anchor being two pitches below green, so only g
+    is searched, and the anchors fix the top of the ladder by construction -- which is why a
+    stray band above the green stage can be dropped instead of vetoing every candidate.
+
+    Then the bands themselves are fitted, because the model is only an approximation of a
+    perspective view.  Round 15's frame placed its last two bands four and six rows off the
+    searched g: three tenths of a pitch, which changes no reading, but enough to sample the
+    bottom of the ladder in the blue gap beside the band rather than on it -- and whether a
+    dark band is the black the entry point painted or blue nobody wrote over is exactly what
+    the marks are there to answer, so it has to be sampled where the band is.  A quadratic
+    through the placed bands fits the frame to under a row everywhere.  The refinement is
+    only kept when it places at least as many bands and scores at least as well, so a frame
+    too poor to re-fit is still read by the model.
+    """
     yg, ym = anchors["green"], anchors["magenta"]
-    runs = [r for r in ranges(rowcls, set(LIT)) if r[2] - r[1] <= 40]
-    print("frame %dx%d   green row %.1f   magenta row %.1f   %d other lit runs" %
-          (w, h, yg, ym, len(runs)))
-    for c, lo, hi in runs:
-        print("   %-7s rows %4d-%4d  h=%2d" % (c, lo, hi, hi - lo + 1))
+    bands = [b for b in bands_of(rowcls) if b[1] != "black" or b[0] > yg]
+    if len(bands) < 6:
+        return None
 
-    # Rows come from framebuffer offsets through y = yg + B*u/(1 - k*u), u in band
-    # pitches from the green anchor and B set by the magenta anchor.  Invert it for u and
-    # score every (squeeze, scale, shift) against the table's colour column.
-    def pitches(k):
-        """Each lit run's centre, in band pitches below the green anchor."""
-        b = (ym - yg) * (1.0 - 2.0 * k) / 2.0
-        out = []
-        for _c, lo, hi in runs:
-            y = (lo + hi) / 2.0
-            den = b + k * (y - yg)
-            out.append((y - yg) / den if den else 0.0)
-        return out
-
-    def indices(k, scale, shift):
-        return [int(round(scale * u + shift)) - SLOT_ZERO_ABOVE_GREEN for u in pitches(k)]
-
-    # Colour agreement alone cannot pick the fit: most of the ladder wants cyan, so sliding
-    # the whole reading by one band scores exactly as well as the true one -- and round 14's
-    # first search stopped on such a shifted fit, which put every sampled row in the gap
-    # between two bands.  Being on the right slot is worth more than being on the right
-    # colour, so the distance from a slot centre comes off the score and breaks the tie.
     best = None
-    for k in [i / 2000.0 for i in range(61)]:
-        us = pitches(k)
-        for scale in [0.94 + i / 200.0 for i in range(25)]:
-            for shift in range(0, 12):
-                placed = [scale * u + shift for u in us]
-                idx = [int(round(p)) - SLOT_ZERO_ABOVE_GREEN for p in placed]
-                if len(set(idx)) != len(idx):
-                    continue
-                dev = sum(abs(p - SLOT_ZERO_ABOVE_GREEN - i) for p, i in zip(placed, idx))
-                score = sum(2 if ladder.get(i, {}).get("want") == c else -1
-                            for i, (c, _lo, _hi) in zip(idx, runs)) - 4.0 * dev
-                if score > 0 and (best is None or score > best[0]):
-                    best = (score, k, scale, shift)
+    for gi in range(0, 61):
+        g = gi / 1000.0
+        p0 = (ym - yg) / (2.0 + g)
+        rows = assign(bands, quad_index(model_coef(yg, p0, g)))
+        s = score_of(rows, ladder)
+        if best is None or s > best[0]:
+            best = (s, model_coef(yg, p0, g))
+    if best is None or best[0] <= 0:
+        return None
+    score, coef = best
+    rows = assign(bands, quad_index(coef))
+
+    for _round in range(3):
+        cand = quad_fit([(r, row) for row, _c, _i, r in rows] + [(-4, yg), (-2, ym)])
+        if cand is None:
+            break
+        again = assign(bands, quad_index(cand))
+        if len(again) < len(rows):
+            break
+        s2 = score_of(again, ladder)
+        if s2 < score:
+            break
+        score, coef, rows = s2, cand, again
+    if score <= 0:
+        return None
+    return score, rows, (deg, center, coef, yg, ym, bands)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("photo")
+    ap.add_argument("--width", type=int, default=600)
+    ap.add_argument("--rotate", type=int, choices=(0, 90, 180, 270), default=None,
+                    help="turn the frame this many degrees clockwise first; by default all "
+                         "four are tried and the one that explains the most bands is kept")
+    ap.add_argument("--center", type=float, default=0.50,
+                    help="where across the frame to read the bands, as a fraction of the width")
+    ap.add_argument("--span", type=float, default=0.12,
+                    help="how wide that reading strip is, as a fraction of the width")
+    ap.add_argument("--driver", default=str(DRIVER))
+    ap.add_argument("--modules", help="text file of scripts/fv-order.py output, to name the "
+                                      "index the bit bands decode to")
+    ap.add_argument("--debug", action="store_true")
+    a = ap.parse_args()
+
+    ladder, _pitch = build_ladder(a.driver)
+
+    # A hand-held frame can put the ladder anywhere, so when the requested strip lands on
+    # the bezel or a reflection the reading slides across the panel a little at a time
+    # rather than giving up.  The orientation is the outer loop because in the wrong one
+    # there is no strip that works at all.
+    degrees = [a.rotate] if a.rotate is not None else [0, 90, 270, 180]
+    best, notes = None, []
+    for deg in degrees:
+        grid, h, w = load(Path(a.photo), a.width, deg)
+        for center in [a.center] + [c for c in (0.50, 0.42, 0.58, 0.34, 0.66) if c != a.center]:
+            rowcls, blueness = read_strip(grid, h, w, center, a.span)
+            anchors = anchors_of(rowcls)
+            if "green" not in anchors or "magenta" not in anchors:
+                notes.append("rotate %-3d strip %.2f  no green and magenta anchors" % (deg, center))
+                continue
+            found = fit(deg, center, h, w, rowcls, anchors, ladder)
+            if found is None:
+                notes.append("rotate %-3d strip %.2f  bands found, none lined up on the table"
+                             % (deg, center))
+                continue
+            if best is None or found[0] > best[0]:
+                best = (found[0], found[1], found[2], rowcls, blueness, h, w)
+            if best and best[0] >= 2.8 * len(bands_of(rowcls)):
+                break       # this frame is read as well as it can be
+        if best and best[0] >= 2.8 * len(bands_of(rowcls)):
+            break
+
     if best is None:
-        raise SystemExit("no lit run could be placed on the ladder -- the anchors are lying, "
-                         "or the frame is cropped through the middle of the ladder")
+        raise SystemExit("the ladder could not be read out of this frame.\n  " +
+                         "\n  ".join(notes or ["no strip in any orientation had both anchors"]))
+    report(best, ladder, a)
 
-    score, k, scale, shift = best
-    print("\nfit: squeeze k=%.4f  scale %.3f  shift %+d  score %.1f (colour %d of %d)" %
-          (k, scale, shift, score,
-           sum(2 for i, (c, _l, _h) in zip(indices(k, scale, shift), runs)
-               if ladder.get(i, {}).get("want") == c), 2 * len(runs)))
 
-    pitch_b = (ym - yg) * (1.0 - 2.0 * k) / 2.0
+def report(best, ladder, a):
+    _score, rows, (deg, center, coef, yg, ym, bands), rowcls, blueness, h, w = best
+    ca, cb, cc = coef
 
     def row_of(i):
-        """The frame row the fit predicts for slot index i, or -1 if it is off the frame."""
-        u = (i + SLOT_ZERO_ABOVE_GREEN - shift) / scale
-        den = 1.0 - k * u
-        if den <= 0:
-            return -1
-        return int(round(yg + pitch_b * u / den))
+        return int(round(ca + cb * i + cc * i * i))
 
     def sample(i, half=3):
-        """Vote the strip's colour at the predicted row of a slot, ignoring rows that
+        """Vote the strip's colour at the predicted row of a band, ignoring rows that
         merely came out mixed.  This is what tells a band painted black at entry (dark)
         from a place where the ladder never was (still the blue BootShim filled) and from
-        a slot the fit put outside the photographed panel."""
+        a band the fit put outside the photographed panel."""
         y = row_of(i)
         if y < 0 or y >= h:
             return y, "off-frame"
         votes = {}
         for yy in range(max(0, y - half), min(h, y + half + 1)):
             c = rowcls[yy]
-            if c not in ("mixed",):
+            if c != "mixed":
                 votes[c] = votes.get(c, 0) + 1
         if not votes:
             return y, "mixed"
         return y, max(votes, key=votes.get)
 
-    lit = {}
-    for i, (c, lo, hi) in zip(indices(k, scale, shift), runs):
-        if i in ladder:
-            b = (ym - yg) * (1.0 - 2.0 * k) / 2.0
-            y = (lo + hi) / 2.0
-            u = (y - yg) / (b + k * (y - yg))
-            dev = abs((scale * u + shift) - SLOT_ZERO_ABOVE_GREEN - i)
-            if dev > 0.35:
-                print("   note: %s at rows %d-%d sits %.2f pitches off band %d" % (c, lo, hi, dev, i))
-            lit[i] = c
+    print("frame %dx%d  turned %d degrees  read at %.2f of the width" % (w, h, deg, center))
+    print("anchors: green row %.1f, magenta row %.1f  ->  row = %.1f %+.2f i %+.4f i^2, "
+          "pitch %.2f rows at slot 0 and %.2f at the last mark" %
+          (yg, ym, ca, cb, cc, cb + 2 * cc, cb + 2 * cc * max(ladder)))
+    print("%d bands in this strip (%d of them lit), %d placed on the ladder, score %.1f" %
+          (len(bands), sum(1 for _y, c in bands if c != "black"), len(rows), _score))
+    for y, c, n, i in rows:
+        dev = abs(n - i)
+        if dev > 0.35:
+            print("   note: %s at row %.0f sits %.2f pitches off band %d" % (c, y, dev, i))
 
-    def report(kind, label):
-        """Print every band of one kind, decided by the fit and by what the strip shows at
-        the row the fit predicts.  A band the run detection found and a band sampled on
-        its own row usually agree; when they do not, both readings are printed."""
+    lit = dict((i, c) for _y, c, _n, i in rows if i >= 0 and c != "black")
+
+    def state_of(s, got):
+        """A white band next to a saturated blue field photographs cyan: the blue and
+        green channels blow out and the red one does not, so it lands in the cyan window.
+        Say which band that is rather than calling it wrong, because the alternative
+        reading -- that the stage never painted -- would send a round after a colour
+        artefact."""
+        if not got:
+            return "dark"
+        if got == s["want"]:
+            return "LIT"
+        if s["want"] == "white" and got == "cyan":
+            return "LIT(white)"
+        return "WRONG(%s)" % got
+
+    def report_kind(kind, label):
         print("\n%s" % label)
-        print("%-11s %-7s %-10s %-9s %s" % ("offset", "expect", "state", "seen", "meaning"))
-        out = []
+        print("%-11s %-7s %-12s %-9s %s" % ("offset", "expect", "state", "seen", "meaning"))
+        dark = []
         for i in sorted(ladder):
             s = ladder[i]
             if s["kind"] != kind:
                 continue
             _y, seen = sample(i)
             got = lit.get(i) or (seen if seen in LIT else None)
-            state = "dark" if not got else ("LIT" if got == s["want"] else "WRONG(%s)" % got)
+            state = state_of(s, got)
             if kind == "slot" and not got:
-                out.append((i, s["off"], s["name"]))
-            print("%#011x %-7s %-10s %-9s %s" % (s["off"], s["want"], state, seen, s["name"]))
-        return out
+                dark.append((i, s["off"], s["name"]))
+            print("%#011x %-7s %-12s %-9s %s" % (s["off"], s["want"], state, seen, s["name"]))
+        return dark
 
-    dark = report("slot", "protocol slots:")
+    dark = report_kind("slot", "protocol slots:")
     if dark:
         print("\nfirst dark slot: index %d at %#011x  %s" % dark[0])
         lit_slots = [i for i in lit if i in ladder and ladder[i]["kind"] == "slot"]
@@ -382,11 +566,11 @@ def main():
     else:
         print("\nevery slot lit")
 
-    if bit_rows:
-        # Sample each band at the row the fit predicts for its offset and decide it on
-        # the spot: a bit is a one-of-two question (yellow or not), so this does not
-        # need the run detection to have found it, and the two readings printed side by
-        # side show which one the frame is actually supporting.
+    if any(s["kind"] == "bit" for s in ladder.values()):
+        # Decide each bit at the row the fit predicts for its offset rather than from the
+        # run detection: a bit is a one-of-two question (yellow or not), so the sample
+        # needs no help from the fit having found the band, and printing both readings side
+        # by side shows which one the frame actually supports.
         print("\nlast loaded image, as a number:")
         print("%-11s %-5s %-8s %-9s %-6s %s" %
               ("offset", "bit", "row", "sample", "value", "check"))
@@ -410,14 +594,14 @@ def main():
             print("\nlast image loaded: FVMAIN file %d  %s" %
                   (index, named.get(index, "(run scripts/fv-order.py and pass --modules)")))
 
-    if mark_rows:
-        report("mark", "what the meter says about itself:")
+    report_kind("mark", "what the meter says about itself:")
 
     if a.debug:
         peak = max(blueness)
         dips = [(lo, hi) for _c, lo, hi in ranges(
             ["d" if blueness[y] < 0.72 * peak else "x" for y in range(h)], {"d"}) if hi - lo >= 1]
         print("\nblueness dips, candidates for empty slots (a vignette produces these too): %s" % dips)
+        print("\nbands in this strip: %s" % "  ".join("%s%.0f" % (c, y) for y, c in bands))
 
 
 if __name__ == "__main__":

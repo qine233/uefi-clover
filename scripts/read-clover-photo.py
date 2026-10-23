@@ -80,7 +80,15 @@ def classify(r, g, b):
     colour is decided by which two of the three channels are high, and the unlit window
     reads as blue or as flat-dark."""
     hi, lo = max(r, g, b), min(r, g, b)
-    if lo > 140 and hi - lo < 45:
+    # White is the only band with no dead channel: yellow paints blue off, cyan paints red
+    # off, magenta paints green off.  The old test asked for three channels that agree to
+    # within 45, which is what a *dim* white looks like, and this camera does not always
+    # render white dim -- round 15's own-file mark measured (92,235,254) and only read as
+    # lit because the want-based fallback rescued it from "cyan", while the round-17 frame
+    # measures (150,250,250) at the same brightness and fell all the way through to
+    # "background", which cost the reading of the handler mark.  So: three channels high
+    # with no dead one, which a yellow-over-blue blend at (100,180,190) still is not.
+    if (lo > 140 and hi - lo < 45) or (lo > 120 and hi > 180):
         return "white"
     # Yellow is the one colour this camera renders dim: the panel paints 0xFFFF00 and the
     # round-16 frame measures (134,255,23) to (141,251,33) on the index bands, so an

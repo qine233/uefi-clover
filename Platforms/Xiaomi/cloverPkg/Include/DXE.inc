@@ -57,12 +57,16 @@
 
   INF Binaries/clover/QcomPkg/Drivers/DALSYSDxe/DALSYSDxe.inf
   #
-  # Round 16: out of the volume as well as out of APRIORI.inc, so no dependency
-  # evaluation can bring it back after the queue drains.  Its FVMAIN file number was 38;
-  # every file after it moves down one, which is why scripts/fv-order.py has to be
-  # re-exported against the new FV before a photograph is decoded.
+  # Round 17: back in, and the round-16 experiment is closed.  With this file out of the
+  # volume the queue ran four rows further than it ever had and then stopped inside
+  # SdccDxe, which is FVMAIN file 42 on that build -- the eMMC host driver does not
+  # survive a boot with no clock producer, so removing the driver cannot teach this
+  # panel anything more.  Round 17 asks a different question of the same hang: what the
+  # CPU was told when it stopped, which CheckpointDxe now paints out of the exception
+  # context.  Restoring the file also restores the numbering, so a round-17 photograph
+  # is decoded against a fv-order.py re-exported with ClockDxe present.
   #
-  #  INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
+  INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/HWIODxe/HWIODxe.inf
   INF Binaries/clover/QcomPkg/Drivers/I2CDxe/I2CDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/SPIDxe/SPIDxe.inf

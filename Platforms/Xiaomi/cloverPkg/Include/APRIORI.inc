@@ -45,18 +45,21 @@ APRIORI DXE {
   INF Binaries/clover/QcomPkg/Drivers/ULogDxe/ULogDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/NpaDxe/NpaDxe.inf
   #
-  # Round 16: ClockDxe is out.  Round 15's photograph named it -- the last image the DXE
-  # core loaded was its FVMAIN file, and its own band stayed dark, so the queue stopped
-  # inside its entry point and never reached anything listed below line 47.
+  # Round 17: ClockDxe is back in, and round 16 is what decided it.  Taking it out of
+  # this list did not starve anything -- apriori entries are queued by line position with
+  # no depex evaluation, so SdccDxe, DisplayDxe, I2CDxe and SPIDxe all still got started
+  # -- and the panel then read FVMAIN file 42, SdccDxe, with every row from the clock down
+  # still dark.  The eMMC host driver dies without a clock producer, which is the answer
+  # the removal was built to get and the last thing it can say.
   #
-  # Taking it out of this list is not the same as taking it out of the boot.  Everything
-  # here is dispatched by list position with no depex evaluation at all, so the four
-  # blobs that name gClockProtocolGuid -- SdccDxe, DisplayDxe, I2CDxe and SPIDxe -- are
-  # still started, and what they do without a clock producer is the reading this build is
-  # after.  If the queue now reaches BdsDxe, the clock driver was the only hang; if it
-  # stops on one of those four, the index meter says which.
+  # The queue stops in the same place either way, so round 17 stops asking where and asks
+  # what the CPU was told: CheckpointDxe registers a synchronous-exception callback and
+  # paints whether a fault happened at all, which range FAR landed in, whether ESR calls
+  # it a data abort and a translation fault, and whether the faulting address is inside
+  # the image the core had just loaded.  A screen with those rows dark and the driver
+  # named is a spin; a screen with them lit is a fault, and says what kind.
   #
-  #  INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
+  INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
 
   INF MdeModulePkg/Universal/Disk/DiskIoDxe/DiskIoDxe.inf
   INF MdeModulePkg/Universal/Disk/PartitionDxe/PartitionDxe.inf

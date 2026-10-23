@@ -20,6 +20,12 @@
 #  here for one reason: the monotonic counter protocol it watches is declared there,
 #  not in MdePkg.
 #
+#  Round 17 added the exception layer, and it is still a consumer of nothing but the
+#  CPU arch protocol.  Registering a synchronous-exception callback is one call through
+#  the protocol ArmCpuDxe installs, the handler is four stores and a dead loop, and the
+#  report goes into bands the boot was never going to use -- see mFaultBits in the C
+#  file for why those seven rows are free and what the reading is for.
+#
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
 

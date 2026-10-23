@@ -254,6 +254,31 @@ def bands_of(classes):
     return out
 
 
+def faults(path):
+    """Parse the exception table: { N, CLOVER_COLOR_X, "what it says" }, where N is a row
+    of the protocol slot table rather than an offset.
+
+    Round 17 borrows the seven slot rows below the clock, because a boot that stops inside
+    a driver never reaches those protocols and their bands are dark on every screen that
+    can carry a fault.  So a fault row has no offset of its own and no ladder position: it
+    is read where its slot band already sits, and the name printed for that band is the
+    protocol *and* the fault, with the mark at the bottom of the ladder saying which of the
+    two meanings the photograph is showing.  Green and magenta never appear here, and that
+    is not a coincidence -- those two colours are what the fit is anchored on, and a second
+    band of either would move the geometry.
+    """
+    rows = slots(path)
+    out = []
+    for m in re.finditer(r"\{\s*(\d+)\s*,\s*(CLOVER_COLOR_\w+)\s*,\s*\"([^\"]+)\"",
+                         path.read_text(encoding="utf-8")):
+        row = int(m.group(1))
+        if row >= len(rows):
+            raise SystemExit("a fault row names slot %d and the table has %d" % (row, len(rows)))
+        out.append({"off": rows[row]["off"], "row": row,
+                    "want": NAME_BY_COLOR[m.group(2)], "name": m.group(3)})
+    return out
+
+
 def build_ladder(driver):
     """Number the bands from their offsets, for all three tables at once: slot 0 is the
     first protocol band and every band below it sits one pitch lower, so a band inserted in
@@ -279,6 +304,13 @@ def build_ladder(driver):
             ladder[index] = {"kind": kind, "off": entry["off"],
                              "want": forced or entry["want"], "name": entry["name"],
                              "bit": entry.get("bit")}
+    for entry in faults(Path(driver)):
+        index = (entry["off"] - base) // pitch
+        band = ladder.get(index)
+        if band is None or band["kind"] != "slot":
+            raise SystemExit("a fault row points at %#x, which is not a slot band" % entry["off"])
+        band["fault"] = entry["name"]
+        band["fault_want"] = entry["want"]
     return ladder, pitch
 
 
@@ -602,6 +634,37 @@ def report(best, ladder, a):
                   (index, named.get(index, "(run scripts/fv-order.py and pass --modules)")))
 
     report_kind("mark", "what the meter says about itself:")
+
+    fault_rows = [(i, ladder[i]) for i in sorted(ladder) if ladder[i].get("fault")]
+    if fault_rows:
+        # The fourth mark is the switch that makes these rows mean anything: without a
+        # registered handler a fault goes to the default one, out to a serial port nobody
+        # can read, and the seven borrowed bands stay exactly as dark as a boot that never
+        # faulted.  Print the legend either way, but say plainly which of the two readings
+        # the photograph supports.
+        handler = [i for i in sorted(ladder)
+                   if ladder[i]["kind"] == "mark" and ladder[i]["off"] == 0x007C0000]
+        live = bool(handler) and bool(lit.get(handler[0]))
+        print("\n%s" % ("exception reading:" if live else
+                        "exception reading is NOT LIVE -- the mark at 0x007c0000 is dark, "
+                        "so either no CPU protocol appeared or something else already held "
+                        "the exception slot, and dark rows below prove nothing:"))
+        print("%-11s %-7s %-12s %-9s %s" % ("offset", "colour", "state", "seen", "also"))
+        set_bits = []
+        for i, s in fault_rows:
+            _y, seen = sample(i)
+            got = lit.get(i) or (seen if seen in LIT else None)
+            want = s["fault_want"]
+            state = "LIT" if got == want else ("dark" if not got else "WRONG(%s)" % got)
+            if got == want:
+                set_bits.append(s["fault"])
+            print("%#011x %-7s %-12s %-9s %s / %s" %
+                  (s["off"], want, state, seen, s["fault"], s["name"]))
+        if live and set_bits:
+            print("\nthe fault says: %s" % "; ".join(set_bits))
+        elif live:
+            print("\nthe handler is registered and no fault row is lit: whatever the index "
+                  "names did not abort, it is still inside a loop")
 
     if a.debug:
         peak = max(blueness)

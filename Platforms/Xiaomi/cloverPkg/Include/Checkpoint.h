@@ -48,6 +48,39 @@
                                                  not in it, so the number above is
                                                  whatever was matched last, not the
                                                  newest load
+    30      white  +0x007C0000                   the CPU arch protocol appeared and this
+                                                 driver holds its synchronous-exception
+                                                 slot, so the seven rows below mean
+                                                 what they say
+
+  Round 17 gives rows 9 to 15 of the protocol ladder a second meaning, and the mark at
+  +0x7C0000 is what decides which meaning a photograph is showing.  Those seven rows are
+  PartitionDxe, BlockIo, the variable write interface, the monotonic counter, the RTC,
+  BDS and the display -- every protocol band below the clock -- and a boot that stops
+  inside a driver never reaches any of them, so they are dark on exactly the screens that
+  need somewhere to put an exception report.  When the mark is lit they read:
+
+    +0x380000 red      a synchronous exception was taken at all
+    +0x3C0000 yellow   FAR is zero, which is a NULL pointer, and the shape a protocol
+                       nobody produced takes
+    +0x400000 yellow   FAR is above 0xA0000000, past the last row of the memory map
+    +0x440000 yellow   FAR is inside the RAM and firmware window, 0x80000000..0x9FFFFFFF
+    +0x480000 red      ESR calls it a data abort (EC 0x24 or 0x25), so FAR can be trusted
+    +0x4C0000 cyan     the fault is a translation fault, DFSC 0x04..0x07, so no page
+                       table entry exists for the address at all
+    +0x500000 yellow   ELR is inside the image the core last loaded, so the abort is in
+                       the module the index names and not in something it called
+
+  None of the seven lit, with the mark lit, is the answer a spin gives: the driver is
+  looping with no exit and no pointer is being dereferenced.  The mark dark is not an
+  answer at all, because Mu keeps one handler per exception type and does not chain, so a
+  slot that was already taken leaves the fault rows exactly as dark as a boot that never
+  faulted.
+
+  Colour is not the information in that table and green and magenta are kept out of it on
+  purpose: those two are what a photograph is aligned on, at stages 1 and 3, and a second
+  band of either in the middle of the ladder would move the fit and misplace every band
+  below it.
 
   Rounds 9 through 13 are the reason the table is this shape, and each of the three
   parts answers a reading that came back ambiguous.

@@ -184,16 +184,16 @@ R Binaries/clover/QcomPkg/Drivers/SPMIDxe/SPMIDxe.depex
 
 # --- clocks, power, remote processors ---------------------------------------
 #
-# ClockDxe is out of the volume in round 16, so its three entries are commented out
-# rather than re-marked: `O` would say "behind a guard that is off", and this is a
-# deliberate experimental removal that has to come back the moment the photograph says
-# what the four blobs waiting on its protocol do without it.  The extractor still pulls
-# it from the tablet's xbl, so restoring it is uncommenting two includes and these three
-# lines -- no re-dump.
+# Round 16 left these three out while the driver was out of the volume, and round 17
+# brings them back with it: the photograph from that build read SdccDxe, so the removal
+# had answered its question and has no further use.  They were commented rather than
+# re-marked `O` all the way through, because `O` means "behind a guard that is off" and
+# this was a deliberate experiment -- the blob never stopped being extracted from the
+# tablet's own xbl.
 #
-# R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
-# R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.efi
-# R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.depex
+R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
+R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.efi
+R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.depex
 R Binaries/clover/QcomPkg/Drivers/NpaDxe/NpaDxe.inf
 R Binaries/clover/QcomPkg/Drivers/NpaDxe/NpaDxe.efi
 R Binaries/clover/QcomPkg/Drivers/NpaDxe/NpaDxe.depex

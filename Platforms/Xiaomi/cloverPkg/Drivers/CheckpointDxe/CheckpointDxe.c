@@ -90,6 +90,44 @@
   apriori entries are queued by list position with no depex evaluation, so the panel is
   a prefix and the last lit row is the last driver the queue reached.
 
+  Round 16 asked the question the meter cannot answer, and it answered a different one.
+  Taking ClockDxe out of the volume did not starve the four blobs that wait on its
+  protocol -- they are apriori entries themselves, so they were still started -- and the
+  queue then ran four rows further and stopped inside SdccDxe, the eMMC host driver.  No
+  clock producer, no eMMC: the removal had told the truth about the dependency and
+  nothing about the hang, so the driver is back in for round 17 and the ladder's rows are
+  worth re-explaining.
+
+  What the panel has never said is *why* a driver that was loaded never came back.  Two
+  shapes fit and they need opposite fixes: a poll loop that never exits, which is a
+  hardware or ordering problem inside the blob, and a CPU exception, which is a NULL
+  pointer or an unmapped register and is a bug this tree can patch.  The second one used
+  to be invisible because the default handler writes its report to a serial port this
+  tablet has no cable for and then dead-loops.  ArmCpuDxe installs the CPU arch protocol
+  at APRIORI line 30, and its exception dispatch (UefiCpuPkg/Library/CpuExceptionHandlerLib/
+  Aarch64/CpuExceptionHandlerLib.c, CommonCExceptionHandler) calls a registered handler
+  for the type before it ever reaches DumpCpuContext, so a callback registered on
+  EXCEPT_AARCH64_SYNCHRONOUS_EXCEPTIONS sees the context of every data abort in the boot.
+  It brings ESR, ELR and FAR, and seven of this drivers rows are free to carry what they
+  say, because in a boot that hangs inside a driver, every slot below that driver is dark
+  anyway.
+
+  That is the trade this round makes, and it is worth stating plainly: rows 9 to 15 of the
+  slot table now have a second meaning, and they only have it when the red row-9 band is
+  lit.  A boot that reaches those drivers paints their protocol band and never paints a
+  fault bit, because nothing raised an exception, so the rows mean what the table says.
+  A boot that faults overwrites seven bands with the story of the fault, in a boot that
+  was never going to use them.  Green and magenta are deliberately absent from the fault
+  colours: those two are what the photograph is aligned on, at stages 1 and 3, and a
+  second one of either would move the fit.
+
+  Four readings come out of it.  No fault band and the red mark lit means the driver spun
+  -- a loop with no exit, which no patch to a pointer will fix.  FAR zero means a NULL
+  protocol pointer, which is the shape a missing producer takes.  FAR in the low physical
+  range means a register the map does not carry, which is the shape a wrong base takes.
+  And a fault with its ELR band dark means the abort happened outside the driver the
+  index meter names, in a library copy or in the core, which changes who has to be fixed.
+
   Drawing nothing through the UEFI display stack and returning EFI_SUCCESS is the
   point: a bar here cannot be the reason a boot stops.
 
@@ -119,6 +157,7 @@
 #include <Protocol/PartitionInfo.h>
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/Bds.h>
+#include <Protocol/Cpu.h>
 
 #include "../../Include/Checkpoint.h"
 
@@ -210,15 +249,15 @@ STATIC CONST struct {
 
   // Line 47, and round 15's reading:  this is where the queue stopped.  Nothing in this
   // tree declares the GUID, so no module of ours can answer for it -- the four blobs
-  // that wait on it are SdccDxe, DisplayDxe, I2CDxe and SPIDxe.  Round 16 takes
-  // ClockDxe out of the queue entirely, which also means a dark row here no longer
-  // proves a hang:  it only proves nobody produced the clock.
-  { &mClockProtocolGuid,                       0x00340000, CLOVER_COLOR_RED,   "the clock protocol (ClockDxe out)"       },
+  // that wait on it are SdccDxe, DisplayDxe, I2CDxe and SPIDxe.  Round 16 took it out to
+  // see whether those four could run without it; they could not, and the first of them
+  // to stop was SdccDxe, so it is back and this row means the clock protocol again.
+  { &mClockProtocolGuid,                       0x00340000, CLOVER_COLOR_RED,   "the clock protocol (ClockDxe)"            },
 
-  // Lines 50, 53, 59, 60, 62, 67 and 89, all of which round 15 found dark because they
-  // sit below the hang.  Because the queue ignores depex, all of them are still *started*
-  // with the clock producer gone -- being dark here will mean the driver refused to
-  // publish without a clock, not that it was never given a turn.
+  // Lines 50, 53, 59, 60, 62, 67 and 89:  these seven rows are what round 17 reads the
+  // exception context into, and they are rows 9 to 15 of this table.  See mFaultBits:
+  // the borrowing is why none of these offsets is repeated there, and why a fault band is
+  // only ever painted by the handler, never here.
   { &gEfiPartitionInfoProtocolGuid,            0x00380000, CLOVER_COLOR_CYAN,  "PartitionDxe (apriori 50)"               },
   { &gEfiBlockIoProtocolGuid,                  0x003C0000, CLOVER_COLOR_CYAN,  "BlockIo, from SdccDxe (apriori 53)"      },
   { &gEfiVariableWriteArchProtocolGuid,        0x00400000, CLOVER_COLOR_CYAN,  "VariableRuntimeDxe (apriori 59)"         },
@@ -273,6 +312,7 @@ STATIC CONST struct {
 #define CLOVER_MARK_OWN_FILE   0
 #define CLOVER_MARK_MATCHED    1
 #define CLOVER_MARK_UNMATCHED  2
+#define CLOVER_MARK_HANDLER    3
 
 STATIC CONST struct {
   UINT64   Offset;
@@ -281,13 +321,31 @@ STATIC CONST struct {
 } mMarks[] = {
   { 0x00700000, CLOVER_COLOR_WHITE, "this drivers own file is in the list"   },
   { 0x00740000, CLOVER_COLOR_CYAN,  "an image was matched against the list"  },
-  { 0x00780000, CLOVER_COLOR_RED,   "an image was not in the list"           }
+  { 0x00780000, CLOVER_COLOR_RED,   "an image was not in the list"           },
+
+  // Round 17, and the fourth mark is of the same kind as the other three: it says
+  // whether an instrument works, not where a boot got to.  White here means the CPU arch
+  // protocol was found and this driver owns the synchronous-exception slot in it, so the
+  // seven fault rows below are live.  Dark means they are not: either no CPU protocol
+  // appeared, or ArmCpuDxe already had a handler registered for the type and Mu returns
+  // EFI_ALREADY_STARTED rather than chaining, in which case a fault would have gone to
+  // the default handler, out to a serial port nobody can read, and a screen with the
+  // fault rows dark says nothing about whether one happened.
+  { 0x007C0000, CLOVER_COLOR_WHITE, "the exception handler is registered"    }
 };
+
 
 STATIC EFI_EVENT    mEvents[ARRAY_SIZE (mSlots)];
 STATIC VOID         *mRegistrations[ARRAY_SIZE (mSlots)];
 STATIC EFI_EVENT    mImageEvent;
 STATIC VOID         *mImageRegistration;
+
+// The image the DXE core was last seen loading, so a faulting address can be said to be
+// inside it or not.  Bases and sizes are taken in ImageLoaded, at the same moment the
+// index bands are painted, which is inside CoreLoadImage.
+STATIC UINT64   mLastImageBase;
+STATIC UINT64   mLastImageSize;
+STATIC BOOLEAN  mHaveLastImage;
 
 //
 // The volume as this driver chose it: the file GUIDs of the one firmware volume that
@@ -524,6 +582,15 @@ ImageLoaded (
 
     PaintMark (CLOVER_MARK_MATCHED);
     PaintIndex (Index);
+
+    // The bounds of the code the core has this moment on its hands, kept for the fault
+    // handler: ELR inside this range says the abort is in the module the index names, and
+    // outside it says the module called something else that died.  ImageSize is the size
+    // the core loaded, which covers the image and its fixups, and the entry point of an
+    // in-place loaded driver is inside it.
+    mLastImageBase  = (UINT64)(UINTN)LoadedImage->ImageBase;
+    mLastImageSize  = (UINT64)LoadedImage->ImageSize;
+    mHaveLastImage  = (BOOLEAN)(mLastImageSize != 0);
   }
 }
 
@@ -690,6 +757,234 @@ EnumerateVolumeFiles (
   gBS->FreePool (Handles);
 }
 
+//
+// Round 17: the exception context, in seven borrowed rows.
+//
+// These are indices into mSlots, not offsets, and that is not laziness.  The rows are
+// slot 9 through 15, the seven below the clock -- PartitionDxe, BlockIo, the variable
+// write interface, the monotonic counter, the RTC, BDS and the display -- and a boot
+// that stops inside a driver never reaches any of them, so they are dark on every screen
+// this round can produce.  Naming them by row also keeps the checker honest: two tables
+// of literal offsets onto the same bands would be the one thing that can silently merge
+// two stages, and scripts/check-clover-uefi.py is right to fail on it.
+//
+// Colours are not the information; position is.  Only the four LIT colours the photograph
+// is calibrated for are used, and green and magenta are left out on purpose -- the reader
+// anchors its geometry on the stage-1 and stage-3 bands, and a second band of either
+// colour in the middle of the ladder would move the fit and misplace everything.
+//
+#define CLOVER_FAULT_TAKEN      0
+#define CLOVER_FAULT_FAR_NULL   1
+#define CLOVER_FAULT_FAR_HIGH   2
+#define CLOVER_FAULT_FAR_RAM    3
+#define CLOVER_FAULT_DATA_ABORT 4
+#define CLOVER_FAULT_TRANSLATE  5
+#define CLOVER_FAULT_PC_IN_FV   6
+
+STATIC CONST struct {
+  UINTN    Row;
+  UINT32   Argb;
+  CHAR8    *Name;
+} mFaultBits[] = {
+  {  9, CLOVER_COLOR_RED,    "a synchronous exception was taken"                  },
+  { 10, CLOVER_COLOR_YELLOW, "FAR is zero -- a NULL pointer"                       },
+  { 11, CLOVER_COLOR_YELLOW, "FAR is above every row of the memory map"            },
+  { 12, CLOVER_COLOR_YELLOW, "FAR is inside the RAM and firmware window"           },
+  { 13, CLOVER_COLOR_RED,    "ESR calls it a data abort (EC 0x24 or 0x25)"         },
+  { 14, CLOVER_COLOR_CYAN,   "and a translation fault -- no mapping at all"        },
+  { 15, CLOVER_COLOR_YELLOW, "ELR is inside the last image the core loaded"        }
+};
+
+//
+// The two bounds are the memory map, not a guess.  Platforms/Xiaomi/cloverPkg/Library/
+// MemoryMapLib/MemoryMapLib.c starts the RAM rows at 0x80000000 and the last one ends at
+// 0xA0000000 -- Kernel, SMEM, the DXE heap, the display reservation, the FV region, the
+// ABOOT FV, the UEFI FD and the handful of buffers above it, and as its header says,
+// nothing above that appears at all.  So FAR lands in one of three named places: below
+// the RAM window, which is where every Qualcomm register this board has sits, from the GCC
+// clock controller at 0x00100000 to the SoC peripherals at 0x0C000000 and up; inside it,
+// which is a pointer into real memory; or above it, which no device of this SoC answers.
+//
+#define CLOVER_RAM_BASE   0x080000000ULL
+#define CLOVER_RAM_TOP    0x0A0000000ULL
+
+// AArch64 exception syndrome fields, from the ARMv8 pseudocode that DebugSupport.h
+// describes: EC is bits 31:26 and DFSC the low six.  Data abort taken from a lower
+// exception level is 0x24, from the same level 0x25; an instruction abort is 0x20 or 0x21;
+// translation faults are DFSC 0x04 through 0x07, one per level of the walk.
+//
+#define CLOVER_EC(ESR)        ((UINTN)((ESR) >> 26))
+#define CLOVER_DFSC(ESR)      ((UINTN)((ESR) & 0x3F))
+#define CLOVER_EC_DATA_LOWER  0x24
+#define CLOVER_EC_DATA_SAME   0x25
+#define CLOVER_EC_INST_LOWER  0x20
+#define CLOVER_EC_INST_SAME   0x21
+
+
+STATIC EFI_EVENT   mCpuEvent;
+STATIC VOID        *mCpuRegistration;
+STATIC BOOLEAN     mHandlerInstalled;
+STATIC BOOLEAN     mFaultPainted;
+STATIC volatile UINTN  mFaultSpin;
+
+/**
+  Paint one fault row.  Idempotent in the direction that matters: once the handler has
+  run, the rows describe that fault, and a second call -- from the same fault arriving
+  again because this handler never returns to the faulting instruction -- changes nothing.
+**/
+STATIC
+VOID
+PaintFault (
+  IN UINTN  Bit
+  )
+{
+  CloverCheckpointBar (mSlots[mFaultBits[Bit].Row].Offset, mFaultBits[Bit].Argb);
+}
+
+/**
+  The synchronous-exception callback.
+
+  Registered on the CPU arch protocol, which ArmCpuDxe installs at APRIORI line 30 --
+  after this driver, so the registration happens from CpuAppeared rather than here.
+  CommonCExceptionHandler calls a handler for the type and returns without touching
+  DumpCpuContext, which means this is the only report a fault on this unit can produce:
+  everything else about it goes to a serial port that has no cable in it.
+
+  The context is the register file as the vector table left it, so ESR, ELR and FAR are
+  read from memory rather than reconstructed.  No allocation, no protocol call, no
+  print: a fault report has to be writable from the moment the abort happened, and the
+  heap may well be what set the abort off.
+
+  This never returns.  Returning would ERET back to the instruction that faulted, which
+  faults again, and the recursion guard that would normally stop that lives in the
+  default handler this callback replaced.  The loop is the same CpuDeadLoop does, written
+  out because BaseLib is not linked into a driver that is supposed to need nothing, and
+  the counter is volatile so the store cannot be optimised away and the loop cannot
+  become an empty branch the compiler is entitled to treat as unreachable.
+**/
+STATIC
+VOID
+EFIAPI
+FaultSeen (
+  IN CONST EFI_EXCEPTION_TYPE  ExceptionType,
+  IN CONST EFI_SYSTEM_CONTEXT  SystemContext
+  )
+{
+  EFI_SYSTEM_CONTEXT_AARCH64  *Context;
+  UINT64                      Esr;
+  UINT64                      Far;
+  UINT64                      Elr;
+  UINTN                       Ec;
+  UINTN                       Dfsc;
+
+  if (mFaultPainted) {
+    for ( ; ;) {
+      mFaultSpin++;
+    }
+  }
+
+  mFaultPainted = TRUE;
+  PaintFault (CLOVER_FAULT_TAKEN);
+
+  Context = SystemContext.SystemContextAArch64;
+  if (Context == NULL) {
+    for ( ; ;) {
+      mFaultSpin++;
+    }
+  }
+
+  Esr  = Context->ESR;
+  Far  = Context->FAR;
+  Elr  = Context->ELR;
+  Ec   = CLOVER_EC (Esr);
+  Dfsc = CLOVER_DFSC (Esr);
+
+  // Where the address was.  Three named ranges and one left over: a FAR that is neither
+  // zero, nor in the RAM window, nor above it is below the RAM window, which is the
+  // register space, and that is the shape a poll of a clock controller with the wrong
+  // base takes.  Note the caveat the reader has to carry: FAR is only meaningful for
+  // translation and permission faults, so an alignment fault reads as FAR zero, and it
+  // is the data-abort row that says whether the address can be believed at all.
+  if (Far == 0) {
+    PaintFault (CLOVER_FAULT_FAR_NULL);
+  } else if (Far >= CLOVER_RAM_TOP) {
+    PaintFault (CLOVER_FAULT_FAR_HIGH);
+  } else if (Far >= CLOVER_RAM_BASE) {
+    PaintFault (CLOVER_FAULT_FAR_RAM);
+  }
+
+  if ((Ec == CLOVER_EC_DATA_LOWER) || (Ec == CLOVER_EC_DATA_SAME)) {
+    PaintFault (CLOVER_FAULT_DATA_ABORT);
+  }
+
+  if (((Ec == CLOVER_EC_DATA_LOWER) || (Ec == CLOVER_EC_DATA_SAME) ||
+       (Ec == CLOVER_EC_INST_LOWER) || (Ec == CLOVER_EC_INST_SAME)) &&
+      (Dfsc >= 0x04) && (Dfsc <= 0x07))
+  {
+    PaintFault (CLOVER_FAULT_TRANSLATE);
+  }
+
+  // Whose code it was.  Without this the index meter names the driver the core was
+  // loading, which is not the same claim as the fault happening inside it: a blob can
+  // fault inside a copy of a library the core linked, or inside the core itself on its
+  // behalf.  Dark here with a fault otherwise fully reported is the reading that says
+  // look somewhere other than the module the number names.
+  if (mHaveLastImage && (Elr >= mLastImageBase) && (Elr < (mLastImageBase + mLastImageSize))) {
+    PaintFault (CLOVER_FAULT_PC_IN_FV);
+  }
+
+  for ( ; ;) {
+    mFaultSpin++;
+  }
+}
+
+/**
+  ArmCpuDxe has appeared, so the exception slot can be taken.
+
+  This runs at TPL_CALLBACK from a protocol notification, which is the first moment the
+  CPU protocol exists: this driver is APRIORI line 24 and the CPU driver is line 30, so
+  the protocol is not there at entry and the drain at entry cannot find it either.  The
+  registration is done once and the white mark is painted only on success, because the
+  difference between "no fault happened" and "nobody could have reported one" is the
+  whole value of the seven rows above.
+**/
+STATIC
+VOID
+EFIAPI
+CpuAppeared (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  EFI_STATUS              Status;
+  EFI_CPU_ARCH_PROTOCOL   *Cpu;
+
+  if (mHandlerInstalled) {
+    return;
+  }
+
+  // Consume the registration either way, so a callback that keeps being queued cannot
+  // paint the ladder again behind this one.
+  DrainAndReport (&gEfiCpuArchProtocolGuid, mCpuRegistration);
+
+  Cpu    = NULL;
+  Status = gBS->LocateProtocol (&gEfiCpuArchProtocolGuid, NULL, (VOID **)&Cpu);
+  if (EFI_ERROR (Status) || (Cpu == NULL) || (Cpu->RegisterInterruptHandler == NULL)) {
+    return;
+  }
+
+  Status = Cpu->RegisterInterruptHandler (Cpu, EXCEPT_AARCH64_SYNCHRONOUS_EXCEPTIONS, FaultSeen);
+  if (EFI_ERROR (Status)) {
+    // EFI_ALREADY_STARTED is the likely one: Mu installs one handler per type and will
+    // not say who owns the slot.  A dark mark with everything else lit is that case, and
+    // it is a fact about this build worth having.
+    return;
+  }
+
+  mHandlerInstalled = TRUE;
+  PaintMark (CLOVER_MARK_HANDLER);
+}
+
 EFI_STATUS
 EFIAPI
 CheckpointDxeEntry (
@@ -774,6 +1069,28 @@ CheckpointDxeEntry (
                            ))) {
         DrainAndReport (&gEfiLoadedImageProtocolGuid, mImageRegistration);
       }
+    }
+  }
+
+  // Then the exception layer, which is a registration rather than an instrument: the CPU
+  // arch protocol does not exist yet at APRIORI line 24, and ArmCpuDxe is line 30, so
+  // there is nothing to register with until it appears.  Asking at entry would be the
+  // round-13 mistake in a new place -- a LocateProtocol that fails reads as a boot with
+  // no faults, when it is a boot whose fault nobody could report.  The notify is drained
+  // at once as well, in case this driver is ever dispatched after the CPU.
+  if (!EFI_ERROR (gBS->CreateEvent (
+                        EVT_NOTIFY_SIGNAL,
+                        TPL_CALLBACK,
+                        CpuAppeared,
+                        NULL,
+                        &mCpuEvent
+                        ))) {
+    if (!EFI_ERROR (gBS->RegisterProtocolNotify (
+                          &gEfiCpuArchProtocolGuid,
+                          mCpuEvent,
+                          &mCpuRegistration
+                          ))) {
+      CpuAppeared (mCpuEvent, NULL);
     }
   }
 

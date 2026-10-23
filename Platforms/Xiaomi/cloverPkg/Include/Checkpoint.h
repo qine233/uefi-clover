@@ -107,6 +107,9 @@
     +0x500000 cyan     a tick arrived with its PC inside that image
     +0x500000 red      a tick arrived with its PC outside it, which says the loop is in a
                        library the core linked rather than in the module the index names
+    +0x500000 yellow   a tick arrived inside one of the two acknowledgement polls, and the
+                       twelve rows above are then bits 27..16 of the register it is reading,
+                       not of the program counter -- see round 20 below
 
   Round 18 was read, and its five page bits were the whole answer they could give: page 10
   of ClockDxe, which is the clock enable-and-acknowledge region and holds twelve candidate
@@ -121,6 +124,25 @@
   SlotIsLent() is what keeps their notifications from colouring a band the tick owns, and
   the two rows left in the middle (ChipInfo at +0x300000, the clock at +0x340000) are the
   anchor that says the ladder has not moved.
+
+  Round 19 was read, and its twelve bits narrowed the page to one instruction: `0xab14`
+  and its `tbnz` at `0xab18` -- set bit 0 of a command register, read it back, wait for the
+  hardware to clear it, no counter and no timeout.  The other ten candidates on page 10 are
+  excluded by the bucket.  What is left is not a code question: `[x8]`, the register being
+  waited on, is a run-time value pulled out of the clock record, and the blob holds no PLL
+  base as a static constant, so the address cannot be read off the disk.  Round 20 borrows
+  the same twelve rows a fourth time.  When the sample lands in that bucket or in the other
+  counter-free poll at `0xa784..0xa79f`, the handler takes bits 27..16 of the register out
+  of the saved context instead of the program counter -- `X8` at the first site, `X10` at
+  the second, the base each loop's `ldr` reads through -- and paints them through
+  mTickAddrBits, which is a parallel table rather than a second use of mTickBits precisely
+  so that a row's place in it cannot re-weight anything.  Twelve bits name a 64 KiB block,
+  which is the whole difference between "a PLL inside GCC, waiting only on its parent" and
+  "a display, video or camera controller that is not reachable at all", and
+  scripts/clover-register-map.py turns the block into the device region the firmware itself
+  declares.  The arrival row turns **yellow** to say which reading the photograph is in, and
+  stays cyan for an address twelve bits cannot reach (bits 16..27 stop at 256 MiB), so an
+  out-of-range register degrades to a plain PC sample instead of painting a wrapped address.
 
   A bit is therefore painted or erased by its own position in the driver's table, not by
   where its row happens to sit among the lit ones: round 18's decode counted yellow rows

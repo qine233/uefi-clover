@@ -294,14 +294,19 @@ the ladder, held square to the panel if that is easy and however it comes out if
 not.  `scripts/read-clover-photo.py` finds the reading strip itself, tries all four
 orientations and keeps whichever explains the most bands, then reports the slot ladder,
 decodes the seven index bits against `scripts/fv-order.py`'s listing, and -- from round 19
--- decodes twelve tick bits against a blob's own disassembly: four for the page and eight
-for the 32-byte bucket inside it.
+-- decodes twelve tick bits against a blob's own disassembly: five for the page and seven
+for the 32-byte bucket inside it.  From round 20 those same twelve rows carry a second
+reading, chosen by the arrival row's colour: when the sample lands in one of the two
+counter-free acknowledgement polls they are bits 27..16 of the register the module is
+waiting on, and `--register-map` names the device region that block falls in.
 
 ```sh
-python3 scripts/fv-order.py      > ~/clover-out/fv-order.txt
+python3 scripts/fv-order.py            > ~/clover-out/fv-order.txt
+python3 scripts/clover-register-map.py > ~/clover-out/register-map.txt
 python3 scripts/read-clover-photo.py photo.jpg \
   --modules ~/clover-out/fv-order.txt \
-  --blob-map ~/clover-out/clockdxe-pages.txt
+  --blob-map ~/clover-out/clockdxe-pages.txt \
+  --register-map ~/clover-out/register-map.txt
 ```
 
 Pass `--driver ~/clover-out/roundNN-CheckpointDxe.c` to read an archived frame: which band
@@ -322,6 +327,15 @@ assert halts whose text went to a serial port this tablet has no cable for, and 
 the condition, not a timeout.  And the module has exactly five counter-free hardware bit
 polls, all on pages 9 and 10, so a tick landing anywhere else is a halt rather than a retry.
 A page the table lists no sites for is its own answer, and the reader says so.
+
+The `--register-map` file is `scripts/clover-register-map.py` dumping the `AddDev` regions
+out of `MemoryMapLib.c` -- the map this firmware actually builds -- as
+`0x<base> 0x<size> <name>` rows.  Twelve bits name a 64 KiB block rather than a register,
+and which region that block overlaps is the finding: inside GCC the acknowledgement waits
+only on a parent clock, while a block no region covers never reached hardware, which the
+reader says in those terms and pairs with the nearest mapped neighbour.  Worth knowing
+before reading one: this build maps no CAM_CC, VIDEO_CC, MDSS or Turing window, so an
+address in any of those is a gap in the memory map as much as a clock bug.
 
 ## Status
 

@@ -205,6 +205,64 @@ def modules(path):
     return out
 
 
+def register_window(path, addr):
+    """Which mapped device region a polled register address lands in.
+
+    The address is the whole point of round 20.  The module is waiting for an
+    acknowledgement bit in some clock controller, and the controller's name is what says
+    which prerequisite is missing: a PLL inside GCC waits on nothing but its parent, one in
+    the video, display or Turing controller waits on that subsystem being reachable at all,
+    and an address no region covers means the read never touched hardware.
+
+    The sampled block is 64 KiB wide, so a region that merely overlaps it counts, and more
+    than one is reported as the ambiguity it is rather than resolved by picking the first.
+    """
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except (IOError, OSError) as exc:
+        return ["  cannot read %s: %s" % (path, exc)]
+
+    rows = []
+    for l in lines:
+        m = re.match(r"\s*(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(.+)", l, re.I)
+        if m:
+            rows.append((int(m.group(1), 16), int(m.group(2), 16), m.group(3).strip()))
+    if not rows:
+        return ["  no `0x<base> 0x<size> <name>` rows in %s -- regenerate it with "
+                "scripts/clover-register-map.py" % path]
+
+    span = 1 << 16
+    hits = [(b, s, n) for b, s, n in rows if b < addr + span and addr < b + s]
+    if not hits:
+        near = min(rows, key=lambda r: abs(r[0] - addr))
+        return ["  no mapped region covers %#x..%#x; the nearest is %r at %#x + %#x, which is "
+                "%#x away.  A clock register nobody maps cannot answer a poll, so if the "
+                "ladder still says this loop is spinning, the read is coming back from "
+                "somewhere else -- all ones, or a default slave." %
+                (addr, addr + span - 1, near[2], near[0], near[1],
+                 addr - near[0] if addr > near[0] else near[0] - addr)]
+    out = ["  %d mapped region%s overlapping that block:" %
+           (len(hits), "s" if len(hits) > 1 else "")]
+    for b, s, n in hits:
+        out.append("    %-22s %#010x + %#010x" % (n, b, s))
+    if len(hits) == 1:
+        b, s, n = hits[0]
+        # The twelve rows name a 64 KiB block, not a register, so the honest statement is
+        # which part of the region the block covers and which part of the block the region
+        # sits in -- both, because the register is in the overlap and either half of the
+        # overlap can hang off the other side.
+        lo, hi = max(addr, b), min(addr + span, b + s)
+        out.append("  so the polled register is %s: the block's %#x..%#x, which is that "
+                   "region's %#x..%#x of its %#x mapped bytes -- whose power domain and "
+                   "parent clock the acknowledgement waits on" %
+                   (n, lo - addr, hi - 1 - addr, lo - b, hi - 1 - b, s))
+    else:
+        out.append("  more than one region shares this block, so the 64 KiB the twelve rows "
+                   "give is not fine enough to name one of them; the driver would have to "
+                   "sample the register offset as well")
+    return out
+
+
 def blob_map(path, page, delta=None):
     """The halt sites scripts/scan-clover-spins.py found on one page of a loaded blob.
 
@@ -386,6 +444,38 @@ def faults(path, table="mFaultBits"):
     return out
 
 
+def tick_addr_bits(path):
+    """Round 20's second reading of the same twelve bands: { row, shift, "name" }, with no
+    colour because every one of them is yellow and the colour is what says which of the two
+    readings a photograph is in.
+
+    The driver keeps this as its own table rather than as a second column on `mTickBits`
+    because a row then holds two bit positions and the reader would have to pick one by
+    hand; two tables that list the same rows in the same order keep the pairing explicit,
+    and `SlotIsLent()` on the device side reads the first one's rows for exactly that
+    reason.  A driver from before round 20 simply has no such table and the reader stays in
+    program-counter mode, which is what an old photograph means.
+    """
+    try:
+        src = path.read_text(encoding="utf-8")
+    except (IOError, OSError):
+        return []
+    head = src.find("mTickAddrBits[] = {")
+    if head < 0:
+        return []
+    body = src[head:src.find("\n};", head)]
+    rows = slots(path)
+    out = []
+    for m in re.finditer(r"\{\s*(\d+)\s*,\s*(\d+)\s*,\s*\"([^\"]+)\"", body):
+        row = int(m.group(1))
+        if row >= len(rows):
+            raise SystemExit("an mTickAddrBits row names slot %d and the table has %d"
+                             % (row, len(rows)))
+        out.append({"off": rows[row]["off"], "row": row, "shift": int(m.group(2)),
+                    "name": m.group(3)})
+    return out
+
+
 def build_ladder(driver):
     """Number the bands from their offsets, for all three tables at once: slot 0 is the
     first protocol band and every band below it sits one pitch lower, so a band inserted in
@@ -424,6 +514,16 @@ def build_ladder(driver):
         if band is None or band["kind"] != "slot":
             raise SystemExit("a tick row points at %#x, which is not a slot band" % entry["off"])
         band.setdefault("tick", []).append(entry)
+    for entry in tick_addr_bits(Path(driver)):
+        index = (entry["off"] - base) // pitch
+        band = ladder.get(index)
+        if band is None or band["kind"] != "slot":
+            raise SystemExit("an address row points at %#x, which is not a slot band"
+                             % entry["off"])
+        if not band.get("tick"):
+            raise SystemExit("mTickAddrBits row %d has no mTickBits row to be a second "
+                             "reading of" % entry["row"])
+        band["tick_addr"] = entry["shift"]
     return ladder, pitch
 
 
@@ -607,6 +707,9 @@ def main():
                                       "index the bit bands decode to")
     ap.add_argument("--blob-map", help="text file of scripts/scan-clover-spins.py output, so a "
                                        "tick page prints the sites inside it")
+    ap.add_argument("--register-map", help="text file of scripts/clover-register-map.py output, "
+                                           "so a polled register address prints the device "
+                                           "region it sits in")
     ap.add_argument("--debug", action="store_true")
     a = ap.parse_args()
 
@@ -803,18 +906,23 @@ def report(best, ladder, a):
                 got = lit.get(i) or (seen if seen in LIT else None)
                 entries = s["tick"]
                 entry = next((t for t in entries if t["want"] == got), entries[0])
-                # The arrival row is the one band the table gives two colours to -- cyan for
-                # a tick whose PC was inside the image, red for one outside -- so either of
-                # them on it is the tick speaking, not a wrong paint.
+                # The arrival row is the one band the table gives three colours to -- cyan
+                # for a tick whose PC was inside the image, red for one outside it, and from
+                # round 20 yellow for a sample that stopped reporting the PC and started
+                # reporting the register a poll is waiting on.  Any of the three is the tick
+                # speaking, not a wrong paint.
+                arrival = any(t["want"] in ("cyan", "red") for t in entries)
                 state = ("LIT" if got in [t["want"] for t in entries] else
                          ("dark" if not got else "WRONG(%s)" % got))
                 if got:
-                    if entry["want"] in ("cyan", "red"):
-                        arrived = entry["want"]
+                    if arrival:
+                        if state == "LIT":
+                            arrived = got
                     elif entry["want"] == "yellow":
                         bits.append((i, entry))
                 print("%#011x %-7s %-12s %-9s %s / %s" %
                       (s["off"], entry["want"], state, seen, entry["name"], s["name"]))
+            addr_mode = (arrived == "yellow")
             if arrived is None:
                 print("\nthe slot is ours and no tick ever arrived: the loop is running with "
                       "interrupts masked, which is a driver stuck at high TPL rather than a "
@@ -827,13 +935,16 @@ def report(best, ladder, a):
                 # way that driver painted it, so the positional rule survives as the fallback
                 # for a table that declares no shifts.
                 order = [i for i, s in tick_rows
-                         if any(t["want"] == "yellow" for t in s["tick"])]
-                shifted = any(entry["shift"] for _i, entry in bits)
+                         if any(t["want"] == "yellow" for t in s["tick"])
+                         and not any(t["want"] in ("cyan", "red") for t in s["tick"])]
+                shifted = any((ladder[i].get("tick_addr") if addr_mode else entry["shift"])
+                              for i, entry in bits)
                 if shifted:
                     value = 0
-                    for _i, entry in bits:
-                        if entry["shift"]:
-                            value |= 1 << entry["shift"]
+                    for i, entry in bits:
+                        shift = (ladder[i].get("tick_addr") if addr_mode else entry["shift"])
+                        if shift:
+                            value |= 1 << shift
                     page = value >> 12
                 else:
                     weight = {i: 1 << (len(order) - 1 - k) for k, i in enumerate(order)}
@@ -849,6 +960,17 @@ def report(best, ladder, a):
                           "the marks above are lit, so the sample was taken while the rows were "
                           "being erased rather than after one was painted -- photograph a boot "
                           "that has been sitting for a few seconds and this resolves")
+                elif addr_mode:
+                    print("\nthe tick is parked in one of the two acknowledgement polls this "
+                          "module can stop in, so the twelve rows are the address of the "
+                          "register it is waiting on: %#x..%#x" %
+                          (value, value + (1 << 16) - 1))
+                    if a.register_map:
+                        for line in register_window(a.register_map, value):
+                            print(line)
+                    else:
+                        print("  (pass --register-map to have that address named as a "
+                              "device region; scripts/clover-register-map.py builds it)")
                 else:
                     print("\nthe tick found the PC at %#x..%#x of that image: page %d, %d of "
                           "the %d address rows lit%s" %

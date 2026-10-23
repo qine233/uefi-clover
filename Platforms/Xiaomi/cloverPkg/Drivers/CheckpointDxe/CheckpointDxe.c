@@ -1034,6 +1034,7 @@ FaultSeen (
 #define CLOVER_TICK_OURS       12
 #define CLOVER_TICK_ARRIVED    13
 #define CLOVER_TICK_OUTSIDE    14
+#define CLOVER_TICK_ADDR_MODE  15
 
 // The four INTIDs ArmTimerDxe registers, in the order it registers them.  Copied rather
 // than read from its header because that header is private to its driver, and because the
@@ -1069,6 +1070,33 @@ FaultSeen (
 //
 #define CLOVER_TICK_SHIFT_MIN  5            // the finest bit any row carries
 
+// The two loops `ClockDxe` can park in, by the 32-byte bucket round 19's sample named them
+// in, and the register each one polls.  Both come out of the blob's own disassembly rather
+// than out of a guess, and both are stable because the blob is extracted from this unit and
+// never rebuilt:
+//
+//   0xab14  `orr w9,w9,#0x1; str w9,[x8]` then `ldr w9,[x8]; tbnz w9,#0,0xab14` -- the
+//           Huayra PLL's update handshake: the driver asks for the latch by setting bit 0
+//           and waits for hardware to clear it.  The address is in x8, at [record, #0].
+//   0xa784  `and w11,w8,#0xfffffffe; str w11,[x10]` then `ldr w9,[x10]; tbz w9,#31,0xa784`
+//           -- a disable followed by a wait for the status bit.  The address is in x10, at
+//           [record, #8].
+//
+// Round 19's photograph landed in the first of these, which is why round 20 samples the
+// register rather than the PC: the PC is now known to the byte, and the one thing that
+// still has no answer is *which* PLL block is refusing to acknowledge.
+#define CLOVER_TICK_POLL_UPDATE  (0xab14 >> CLOVER_TICK_SHIFT_MIN)
+#define CLOVER_TICK_POLL_STATUS  (0xa784 >> CLOVER_TICK_SHIFT_MIN)
+
+// In address mode the same twelve rows carry bits 16..27 of the polled register: 64 KiB
+// granularity, which is exactly the resolution that separates this SoC's clock controllers
+// (GCC 0x0010_0000, CAM 0x00AA_C000, VIDEO 0x00AB_0000, MDSS 0x00AE_0000, Turing 0x01C4_0000
+// -- 0x10, 0xaa, 0xab, 0xae, 0x1c4), and 256 MiB of reach, which covers every register row
+// in MemoryMapLib.c but the GICr window nobody polls a clock bit in.  An address that does
+// not fit is not sampled at all: the rows stay a PC sample and the arrival row stays cyan,
+// so a saturated reading is indistinguishable from round 19's rather than silently wrong.
+#define CLOVER_TICK_ADDR_SHIFT_MIN  16
+
 STATIC CONST struct {
   UINTN    Row;
   UINT32   Argb;
@@ -1089,13 +1117,41 @@ STATIC CONST struct {
   { 13, CLOVER_COLOR_YELLOW, 12, "tick PC page, bit 0"                              },
   { 14, CLOVER_COLOR_WHITE,   0, "the timer's GIC source is ours"                   },
   { 15, CLOVER_COLOR_CYAN,    0, "a tick arrived, with its PC inside that image"    },
-  { 15, CLOVER_COLOR_RED,     0, "a tick arrived, with its PC outside that image"   }
+  { 15, CLOVER_COLOR_RED,     0, "a tick arrived, with its PC outside that image"   },
+  { 15, CLOVER_COLOR_YELLOW,  0, "the twelve rows are the polled register, not the PC" }
+};
+
+//
+// The same twelve bands read as an address.  Row 9 is the sampled bit's least significant
+// end here, where in the table above it was the page's most significant one, because the
+// rows are painted from these constants and never from their order.
+//
+STATIC CONST struct {
+  UINTN    Row;
+  UINTN    Shift;
+  CHAR8    *Name;
+} mTickAddrBits[] = {
+  {  0, 27, "polled register, bit 27 (the 64 MiB quarter of the address space)"      },
+  {  1, 26, "polled register, bit 26"                                                },
+  {  2, 25, "polled register, bit 25"                                                },
+  {  3, 24, "polled register, bit 24"                                                },
+  {  4, 23, "polled register, bit 23"                                                },
+  {  5, 22, "polled register, bit 22"                                                },
+  {  6, 21, "polled register, bit 21"                                                },
+  {  9, 16, "polled register, bit 16 (the block's low 64 KiB)"                       },
+  { 10, 17, "polled register, bit 17"                                                },
+  { 11, 18, "polled register, bit 18"                                                },
+  { 12, 19, "polled register, bit 19"                                                },
+  { 13, 20, "polled register, bit 20"                                                }
 };
 
 STATIC BOOLEAN                             mTickInstalled;
 STATIC BOOLEAN                             mTickArrived;
 STATIC BOOLEAN                             mTickOutsideShown;
 STATIC UINTN                               mTickBucketShown;
+STATIC UINTN                               mTickRegShown;
+STATIC BOOLEAN                             mTickAddressShown;
+STATIC UINT32                              mTickArrivedShown;
 STATIC UINT32                              mTickShownMask;
 STATIC EFI_HARDWARE_INTERRUPT_PROTOCOL     *mInterrupt;
 STATIC UINT64                              mTickTicks;
@@ -1190,6 +1246,11 @@ TickSeen (
   UINTN                       Delta;
   UINTN                       Bucket;
   UINTN                       Entry;
+  UINTN                       Reg;
+  UINTN                       Value;
+  UINTN                       Shift;
+  UINT32                      Argb;
+  BOOLEAN                     AddressMode;
 
   // End of interrupt first, the way ArmTimerDxe does it, so a repaint of a 128 KiB band
   // cannot make the next tick be missed, and the timer is re-armed whether or not this
@@ -1219,35 +1280,65 @@ TickSeen (
     // is: this band says the same thing every time it is written.
     if (!mTickOutsideShown) {
       mTickOutsideShown = TRUE;
+      mTickArrivedShown = CLOVER_COLOR_RED;
       PaintTick (CLOVER_TICK_OUTSIDE);
     }
 
     return;
   }
 
-  // The arrival row is painted once: a tick that came is a fact that does not change, and
-  // writing the band again a thousand times a second buys nothing.
-  if (!mTickArrived) {
-    mTickArrived = TRUE;
-    PaintTick (CLOVER_TICK_ARRIVED);
+  // The arrival row is painted whenever its meaning changes, which round 20 made more often
+  // than once: a tick that came is a fact that does not change, but the same band now also
+  // says *which* twelve bits the rows above are holding.
+  mTickArrived      = TRUE;
+  Delta             = (UINTN)(Elr - mLastImageBase);
+  Bucket            = Delta >> CLOVER_TICK_SHIFT_MIN;
+
+  /*
+    Round 20.  Round 19's photograph put the PC at 0xab14, which is the Huayra PLL's update
+    handshake: the driver sets bit 0 of a register and waits for hardware to clear it, with
+    no counter and no timeout, so the only thing left to learn is which register.  That is
+    x8 here, live across the two-instruction loop and loaded from the clock record at entry,
+    and the same is true of the other parkable poll at 0xa784 with its pointer in x10.  So
+    when the sample lands in either bucket the rows switch to that address, and the arrival
+    row says so in yellow.  Anywhere else the rows stay exactly the PC reading they were.
+  */
+  Reg = 0;
+  if (Bucket == CLOVER_TICK_POLL_UPDATE) {
+    Reg = (UINTN)Context->X8;
+  } else if (Bucket == CLOVER_TICK_POLL_STATUS) {
+    Reg = (UINTN)Context->X10;
   }
 
-  // Last writer wins, which is what turns a single sample of a long hang into the answer.
-  // The tick also fires during ordinary dispatch, so the value that stops changing is the
-  // one the loop is parked at.  Round 18 latched on the 4 KiB page and that was coarse
-  // enough to leave twelve candidates inside one reading; this latches on 32 bytes, which
-  // splits every site on ClockDxe's page 10 -- the two ack polls at 0xa784 and 0xab14, the
-  // three Huayra PLL ASSERT(0)s, and the bare `b .` at 0xac38 -- from each other.
-  Delta  = (UINTN)(Elr - mLastImageBase);
-  Bucket = Delta >> CLOVER_TICK_SHIFT_MIN;
-  if (Bucket == mTickBucketShown) {
-    return;
+  AddressMode = ((Reg >> CLOVER_TICK_ADDR_SHIFT_MIN) < ((UINTN)1 << CLOVER_TICK_BIT_ROWS));
+
+  Argb = AddressMode ? CLOVER_COLOR_YELLOW : CLOVER_COLOR_CYAN;
+  if (mTickArrivedShown != Argb) {
+    mTickArrivedShown = Argb;
+    PaintTick (AddressMode ? CLOVER_TICK_ADDR_MODE : CLOVER_TICK_ARRIVED);
   }
 
-  mTickBucketShown = Bucket;
+  if (AddressMode) {
+    if (mTickAddressShown && (Reg == mTickRegShown)) {
+      return;
+    }
+
+    mTickRegShown = Reg;
+  } else {
+    if (!mTickAddressShown && (Bucket == mTickBucketShown)) {
+      return;
+    }
+
+    mTickBucketShown = Bucket;
+  }
+
+  mTickAddressShown = AddressMode;
 
   // Erase the bits the previous sample set before painting this one, so the bands are the
-  // newest address and not the union of everything the loop has walked through.
+  // newest address and not the union of everything the loop has walked through.  This is
+  // load-bearing in a way round 19 did not need: the two modes put different weights on
+  // the same twelve bands, so a mode switch with no erase paints a PC reading under an
+  // address label.
   for (Entry = CLOVER_TICK_FIRST_BIT; Entry < CLOVER_TICK_BIT_ROWS; Entry++) {
     if (((mTickShownMask >> Entry) & 1) != 0) {
       PaintTickAs (Entry, CLOVER_COLOR_BLACK);
@@ -1256,8 +1347,13 @@ TickSeen (
 
   mTickShownMask = 0;
 
+  Value = AddressMode ? Reg : Delta;
+
   for (Entry = CLOVER_TICK_FIRST_BIT; Entry < CLOVER_TICK_BIT_ROWS; Entry++) {
-    if (((Delta >> mTickBits[Entry].Shift) & 1) != 0) {
+    // The two tables list the same rows in the same order, so one index addresses both; the
+    // colour always comes from mTickBits because mTickAddrBits has none to give.
+    Shift = (AddressMode ? mTickAddrBits[Entry].Shift : mTickBits[Entry].Shift);
+    if (((Value >> Shift) & 1) != 0) {
       PaintTick (Entry);
       mTickShownMask |= (UINT32)(1u << Entry);
     }

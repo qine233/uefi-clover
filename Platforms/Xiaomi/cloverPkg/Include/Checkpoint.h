@@ -18,7 +18,9 @@
   shows the whole ladder, and a band identifies itself by where it sits.  Below the
   slots the seven yellow bands are not stages at all but a number: the FVMAIN file
   index of the last driver the DXE core loaded, bit 6 topmost, so the module that
-  hangs names itself.
+  hangs names itself.  The three bands under that are the meter telling the truth
+  about itself, because in round 14 a dark index meant either nothing had loaded or
+  the meter was broken, and the two looked identical.
 
     stage  colour  offset from the splash base   painted from
     -----  ------  ----------------------------  ------------------------------
@@ -30,13 +32,22 @@
             ->     256 KiB apart                 and then recoloured below
      4..19  mixed  +0x00140000 .. +0x00500000    sixteen slots in the order the DXE
             (cyan  core reaches them: FV2 and FVB, which it publishes itself; the
-             with   CPU arch protocol; VariableRuntimeDxe twice (write, then
-             red    readable); RTC; the vendor fan-in GUID; the GIC and the ARM
-             ones)  timer inside the Qualcomm chain; then red ChipInfo, SMEM and
-                   Clock; then BlockIo off the eMMC host, partitions, and at the
-                   end GraphicsOutput and BdsDxe
+             with   CPU arch protocol; VariableRuntimeDxe; the monotonic counter at
+             red    file 14; RTC; the vendor fan-in GUID; the GIC and the ARM timer
+             ones)  inside the Qualcomm chain; then red ChipInfo, SMEM and Clock;
+                   then BlockIo off the eMMC host, partitions, and at the end
+                   GraphicsOutput and BdsDxe
     20..26  yellow +0x00540000 .. +0x006C0000    the seven bits of the last loaded
             ->black                             image's file index, high bit first
+    27      white  +0x00700000                   this drivers own file was found in the
+                                                 list the index is matched against, so
+                                                 the number above is a row of fv-order.py
+    28      cyan   +0x00740000                   an image was loaded whose file was in
+                                                 that list, so the meter is live
+    29      red    +0x00780000                   an image was loaded whose file was
+                                                 not in it, so the number above is
+                                                 whatever was matched last, not the
+                                                 newest load
 
   Rounds 9 through 13 are the reason the table is this shape, and each of the three
   parts answers a reading that came back ambiguous.
@@ -54,7 +65,27 @@
   ran out of things to run.  Round 13's photograph said exactly that -- the last
   producer band lit was SMEM (file 30 of FVMAIN) and Clock (38) was the first dark one
   under it, with BdsDxe (64) dark too -- and it exposed two flaws in the instrument
-  itself, which are what stages 4..26 now exist to fix.
+  itself, which are what stages 4..19 and 20..26 now exist to fix.
+
+  Round 14 confirmed the drained reading -- FV2, FVB and the CPU arch protocol lit; the
+  fan-in GUID, the GIC, the timer, ChipInfo and SMEM lit -- and added a fact nobody had
+  asked for: the three bands between them, VariableRuntimeDxe, the monotonic counter and
+  RTC, stayed dark.  A hole in the middle of a ladder whose bands below it light is not
+  a stopped loop, it is drivers that ran and returned without producing what they are
+  supposed to produce.  The two variable bands went together, so one of them now watches
+  the monotonic counter instead, and the meter is the reason for asking again.
+
+  The meter itself reported nothing: all seven index bands came back dark, which is also
+  exactly what they look like when the meter never matched anything.  Two bugs in
+  CheckpointDxe caused it, and stages 27..29 exist so that a dark index can never again
+  be read as either of two opposite things.  FvGetNextFile treats FileType as IN OUT and
+  writes back the type of the file it returned (MdeModulePkg/Core/Dxe/FwVol/FwVolRead.c:
+  207), so setting it to EFI_FV_FILETYPE_ALL once before the loop makes the second call
+  and every call after it search for one file type only.  And the list was built from
+  every volume with an FV2 instance concatenated in handle order, so even a correct walk
+  would have numbered FVMAIN files from however many files the boot firmware volume
+  reported first -- an offset a photograph cannot see.  The walk is now confined to the
+  volume holding this drivers own file, taken from its loaded image protocol at entry.
 
   The first is that CoreRegisterProtocolNotify does not report interfaces that already
   exist; it only appends a notification record (MdeModulePkg/Core/Dxe/Hand/Notify.c:

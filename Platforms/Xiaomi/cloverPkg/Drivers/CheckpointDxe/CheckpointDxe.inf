@@ -2,20 +2,23 @@
 #  clover: the DXE-dispatch checkpoint driver.
 #
 #  Draws the stage-3 band at its own entry, paints every slot of the ladder black,
-#  recolours one per protocol that exists or appears, and puts the FVMAIN file index
-#  of the last image the DXE core loaded across seven yellow bit bands at the bottom
-#  (Include/Checkpoint.h).  It links nothing of the platform's and depends on
-#  nothing, so it is dispatched even when the vendor blobs behind it are not; that
-#  is the point of having it in APRIORI.
+#  recolours one per protocol that exists or appears, puts the FVMAIN file index of
+#  the last image the DXE core loaded across seven yellow bit bands, and finishes
+#  with three marks that say whether that index is live (Include/Checkpoint.h).  It
+#  links nothing of the platform's and depends on nothing, so it is dispatched even
+#  when the vendor blobs behind it are not; that is the point of having it in
+#  APRIORI.
 #
 #  A protocol installed before this driver ran still paints its band, but not
 #  because RegisterProtocolNotify reports it -- it does not (Hand/Notify.c:139 just
 #  appends a record).  The driver drains each registration with LocateHandle
 #  (ByRegisterNotify) at entry, which is what makes those instances visible.
 #
-#  The [Protocols] list declares what it notifies on.  The four Qualcomm and
+#  The [Protocols] list declares what it notifies on.  The five Qualcomm and
 #  EmbeddedPkg GUIDs are local to the C file and not listed here, because naming
-#  them would add packages this bring-up instrument should not need.
+#  them would add packages this bring-up instrument should not need.  MdeModulePkg is
+#  here for one reason: the monotonic counter protocol it watches is declared there,
+#  not in MdePkg.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
@@ -30,6 +33,7 @@
 
 [Packages]
   MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
 
 [Sources]
   CheckpointDxe.c
@@ -44,7 +48,7 @@
   gEfiFirmwareVolumeBlockProtocolGuid ## CONSUMES
   gEfiLoadedImageProtocolGuid       ## CONSUMES
   gEfiCpuArchProtocolGuid           ## CONSUMES
-  gEfiVariableArchProtocolGuid      ## CONSUMES
+  gEfiMonotonicCounterArchProtocolGuid ## CONSUMES
   gEfiVariableWriteArchProtocolGuid ## CONSUMES
   gEfiRealTimeClockArchProtocolGuid ## CONSUMES
   gEfiTimerArchProtocolGuid         ## CONSUMES

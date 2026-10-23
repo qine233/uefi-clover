@@ -774,10 +774,12 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
             # not, it stores the offset in a row and passes it later, so scan for
             # both shapes. A table row the checker cannot see is a band nobody
             # validated.  The third shape is the index bit table, whose rows carry
-            # an offset and a bit number rather than a GUID.
+            # an offset and a bit number rather than a GUID, and the fourth is the
+            # mark table, whose rows carry an offset, a colour and a sentence.
             found = re.findall(r"CloverCheckpointBar\s*\(\s*(0x[0-9a-fA-F]+)", text)
             found += re.findall(r"\{\s*&\w+,\s*(0x[0-9a-fA-F]+)\s*,", text)
             found += re.findall(r"\{\s*(0x[0-9a-fA-F]+)\s*,\s*\d+\s*\}", text)
+            found += re.findall(r"\{\s*(0x[0-9a-fA-F]+)\s*,\s*CLOVER_COLOR_\w+\s*,", text)
             for offset in found:
                 stages.setdefault(int(offset, 0), []).append(path.name)
         row = map_rows.get("Display Reserved") if map_rows else None

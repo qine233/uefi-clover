@@ -205,6 +205,53 @@ def modules(path):
     return out
 
 
+def blob_map(path, page):
+    """The halt sites scripts/scan-clover-spins.py found on one page of a loaded blob.
+
+    A page number is only worth the listing behind it: page 11 of `ClockDxe` is not a
+    count, it is `HALclkHuayraPLLTemplate.c:622` and the twenty-one other self-branches
+    sharing that page.  Absence is an answer too, and a different one -- a tick that
+    lands on a page the scan lists no sites for is inside a loop that has an exit, not
+    inside a halt, so say that rather than complaining about the file.
+    """
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except (IOError, OSError) as exc:
+        return ["  cannot read %s: %s" % (path, exc)]
+
+    want = "PAGE %2d " % page
+    start = next((k for k, l in enumerate(lines) if l.startswith(want)), None)
+    if start is None:
+        row = next((l for l in lines if l.startswith("pages this module can paint:")), "")
+        pages = re.findall(r"\d+", row.split(":", 1)[1]) if row else []
+        if pages:
+            return ["\npage %d lists no sites in %s, whose sites are on pages %s -- so the tick "
+                    "is not on a `b .` halt or a counter-free poll of this blob. That is a loop "
+                    "with an exit, or code outside the module; it is not the assert halt the "
+                    "other pages name." % (page, path, ", ".join(pages))]
+        return ["\nno PAGE %d entry in %s -- regenerate it with scripts/scan-clover-spins.py"
+                % (page, path)]
+
+    out = ["\n%s line %d:" % (path, start + 1), lines[start]]
+    for l in lines[start + 1:]:
+        if not l.startswith("    0x"):
+            break
+        out.append(l)
+    # The polls live in their own section at the foot of the file, keyed by the same
+    # page marker, and they are the sites a tick can be caught in mid-loop rather than
+    # at a halt, so they belong under the same answer.
+    polls = [l for l in lines if l.startswith("    0x") and want in l]
+    if polls:
+        out.append("    counter-free hardware bit polls on this page:")
+        out.extend(polls)
+    if any("[no signature]" in l for l in out):
+        out.append("    one row above has no ASSERT() signature, which is what CpuDeadLoop() "
+                   "compiles to -- so a tick on this page is also consistent with an assert "
+                   "having parked the CPU, and the five bits cannot tell that halt from the "
+                   "page's other sites")
+    return out
+
+
 def ranges(rowcls, keep):
     out, y, h = [], 0, len(rowcls)
     while y < h:
@@ -516,6 +563,8 @@ def main():
     ap.add_argument("--driver", default=str(DRIVER))
     ap.add_argument("--modules", help="text file of scripts/fv-order.py output, to name the "
                                       "index the bit bands decode to")
+    ap.add_argument("--blob-map", help="text file of scripts/scan-clover-spins.py output, so a "
+                                       "tick page prints the sites inside it")
     ap.add_argument("--debug", action="store_true")
     a = ap.parse_args()
 
@@ -737,6 +786,12 @@ def report(best, ladder, a):
                           "of it (%d of the %d five-bit rows lit)" %
                           (page, page * 0x1000, page * 0x1000 + 0xFFF,
                            len(bits), len(page_rows)))
+                    # A page number is only worth what the table behind it is worth:
+                    # scripts/scan-clover-spins.py turns a blob's objdump listing into the
+                    # dead-loop and bit-poll sites grouped by exactly this number.
+                    if a.blob_map:
+                        for line in blob_map(a.blob_map, page):
+                            print(line)
         else:
             print("\n%s" % ("exception reading:" if live else
                             "exception reading is NOT LIVE -- the mark at 0x007c0000 is dark, "

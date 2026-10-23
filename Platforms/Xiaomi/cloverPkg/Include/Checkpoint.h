@@ -112,12 +112,11 @@
                        not of the program counter -- see round 20 below
     +0x300000 yellow   round 21: the polled register is inside the block round 20 named, so
                        the twelve rows are bits 15..4 of it -- a 16-byte offset within MMCC
-    +0x340000 red      round 21: the word the poll just tested is that poll's own dead pattern
-                       (all ones where it waits for bit 0 to clear, all zeros where it waits
-                       for bit 31 to come up), so the transaction completed and no device
-                       drove the data
-    +0x340000 yellow   round 21: the polled word is a real value, so the block answers and it
-                       is the bit that never arrives
+    +0x340000 red      round 22 hands this row back to its own slot: lit means `ClockDxe`
+                       reached the end of its entry point and installed the clock protocol,
+                       which is the single band that says the watchdog below let the driver
+                       finish.  Round 21 borrowed it for a liveness flag and got its answer
+                       (the block does drive real data), so the borrowing is undone.
 
   Round 18 was read, and its five page bits were the whole answer they could give: page 10
   of ClockDxe, which is the clock enable-and-acknowledge region and holds twelve candidate
@@ -131,7 +130,8 @@
   bands make redundant -- the module is named by its file number, not by its protocols.
   SlotIsLent() is what keeps their notifications from colouring a band the tick owns.  Until
   round 21 the two rows left in the middle (ChipInfo at +0x300000, the clock at +0x340000)
-  were spare, and they still anchor the ladder's geometry, but round 21 gives them a reading.
+  were spare.  Round 21 gave both a reading; round 22 gives the clock's back, because from
+  here on it is the row worth reading.
 
   Round 19 was read, and its twelve bits narrowed the page to one instruction: `0xab14`
   and its `tbnz` at `0xab18` -- set bit 0 of a command register, read it back, wait for the
@@ -173,10 +173,32 @@
   they test into `w9` (`ldr w9,[x8]` and `ldr w9,[x10]`), so the interrupted context already
   holds it and no second MMIO read has to be justified: all ones in the update handshake and
   all zeros in the status wait are each that loop's own dead pattern, the signature of a
-  transaction that completed with nothing driving the data.  Those two go on the clock row,
-  and everything else that row can read is a real value with the bit simply not arriving --
-  a parent clock or a power domain whose enable was never confirmed, which is a different
-  driver bug from a dead bus.
+  transaction that completed with nothing driving the data.  Round 21 asked it on the clock
+  row and the row came back yellow, so the answer is on record: the bus is fine, MMCC drives
+  real values, and it is the acknowledgement bit that never arrives.  That row is not borrowed
+  any more; what was learned from it lives in the round's reading, not in the ladder.
+
+  Round 22 stops measuring and tries to move.  `0xab18`'s `tbnz` has no counter and no
+  deadline, and one free instruction word cannot hold a bounded retry -- a counter to
+  initialise, a decrement and two branches -- while this file has no executable range in
+  `ClockDxe.efi` it trusts enough to put them in (its PE section table does not parse into a
+  usable code cave).  So the bound is kept by the tick handler instead.  It counts
+  consecutive milliseconds sampled inside either of the two known polls and, at 200 of them,
+  sets `Context->ELR` to the loop's own exit: `0xab1c`, the `ret` after the update handshake,
+  or `0xa78c`, the first instruction after the status wait.  The vector table makes that legal
+  rather than clever -- `ExceptionSupport.S` stores the saved link register into the frame it
+  hands the handler and reloads it from that same memory on the way out
+  (`ldp x29, x30, [x28]` then `msr elr_el1, x29`), so the frame is the supported way to change
+  where an interrupt returns to.  Everything else about the resumed context is left exactly as
+  the tick found it, and the cut only happens while the tested bit still asks for another
+  iteration, so a pass that was about to fall through on its own is never touched.
+
+  What that buys and what it costs both show up on this ladder.  If the dispatch loop was
+  waiting on this one handshake, the index meter moves off 38 and the rows below it start
+  filling in; if `ClockDxe` then completes, the row at +0x340000 turns red with the protocol
+  it installs.  If the boot stops somewhere else, that new stop is the next reading.  The
+  cost is a clock left half-configured: `CMD_REG` bit 0 stays set, so whatever this driver
+  went on to programme did not latch.
 
   One defect round 20 shipped with is fixed here rather than left as a footnote: its address
   test was only `Reg >> 16 < 4096`, and a tick that landed anywhere *else* on the page left

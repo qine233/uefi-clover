@@ -302,8 +302,9 @@ waiting on, and `--register-map` names the device region that block falls in.  R
 a third reading and two flags: when that block is the one round 20's photograph named -- MMCC
 at `0x0c8c0000`, a node of this tablet's own device tree -- the twelve rows become bits 15..4
 of the register, a 16-byte bucket that `--dt` compares against the power domains hanging off
-that controller, the `+0x300000` band says so, and `+0x340000` says whether the word the loop
-tested was a value at all or the dead pattern a bus with nobody behind it returns.
+that controller, and the `+0x300000` band says so.  Round 21's other flag, on `+0x340000`, is
+gone: it answered its question (the block drives real data, so nothing is missing on the bus)
+and round 22 needs that row for the protocol it was originally a slot for.
 
 ```sh
 python3 scripts/fv-order.py            > ~/clover-out/fv-order.txt
@@ -353,6 +354,28 @@ round 21's 16-byte bucket useful: it names the eight GDSCs the tree hangs off th
 `+0x3674` vfe1, `+0x36d4` cpp, `+0xe020` bimc_smmu) and says whether the polled register falls
 in one.  A bucket that is not a power domain is a branch clock's control triple, and the two
 readings call for different fixes.
+
+Round 21's photograph was read, and both of its new facts came back the same way: the twelve
+rows decoded to `MMCC + 0x2040..0x204f`, and the liveness band was yellow, so the block answers
+and only the acknowledgement bit fails to arrive.  `0x2040` is mainline's `mdp_clk_src`
+`CMD_REG`/`CFG_REG` pair (`.cmd_rcgr = 0x2040` in `clk-rcg2` terms, `mmcc-sdm660.c`), the source
+that feeds the blob's own `mmss_mdss_mdp_clk` record -- found by parsing the clock-record table
+out of `ClockDxe.efi` and matching `0xc2040` against the device tree.  Upstream never polls that
+bit; it writes `CMD_REG` and moves on, which is why the wait is this blob's own behaviour rather
+than a hardware requirement.  Two candidates survived: the RCG's input clock is not running
+(a glitch-free latch needs an edge, and the parents `mdp_clk_src` can select -- MMPLL5, MMPLL7,
+GPLL0 -- are nothing our boot brings up, while a stock ABL had already drawn a splash from that
+same MDSS), or MDSS power is simply off.  Round 22 stops measuring and tries to move: the tick
+handler now counts consecutive milliseconds sampled inside either of the two counter-free polls
+and, at 200 of them, points `Context->ELR` at that loop's own exit (`0xab1c` after the update
+handshake, `0xa78c` after the status wait).  The vector table makes that a supported operation --
+`ExceptionSupport.S` stores the saved link register into the frame it hands the handler and
+reloads it from the same memory before `eret` -- and the cut only happens while the tested bit
+still asks for another iteration, so a wait that was about to finish naturally is left alone and
+`ClockDxe.efi` stays byte-identical.  What it does not do is fix the clock: `CMD_REG` bit 0 is
+left set.  The reading that pays for that is `+0x340000`, which round 22 hands back to its own
+protocol slot -- red there means `ClockDxe` reached the end of its entry point -- together with
+the index meter, which can only leave 38 if the driver stopped being the last image loaded.
 
 ## Status
 

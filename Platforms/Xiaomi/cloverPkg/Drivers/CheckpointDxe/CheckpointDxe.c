@@ -1035,9 +1035,7 @@ FaultSeen (
 #define CLOVER_TICK_ARRIVED    13
 #define CLOVER_TICK_OUTSIDE    14
 #define CLOVER_TICK_ADDR_MODE  15
-#define CLOVER_TICK_WIDTH_FLAG 16            // rows 7: twelve rows are a block offset
-#define CLOVER_TICK_DEAD_FLAG  17            // row 8: the polled word is the dead pattern
-#define CLOVER_TICK_ALIVE_FLAG 18            // row 8: the polled word is real
+#define CLOVER_TICK_WIDTH_FLAG 16            // row 7: twelve rows are a block offset
 
 // The four INTIDs ArmTimerDxe registers, in the order it registers them.  Copied rather
 // than read from its header because that header is private to its driver, and because the
@@ -1091,6 +1089,47 @@ FaultSeen (
 #define CLOVER_TICK_POLL_UPDATE  (0xab14 >> CLOVER_TICK_SHIFT_MIN)
 #define CLOVER_TICK_POLL_STATUS  (0xa784 >> CLOVER_TICK_SHIFT_MIN)
 
+//
+// Round 22: the way out of each of those two loops, taken from the same disassembly.
+//
+// Neither loop has a counter and neither has a deadline, and the one instruction word each
+// spends on the branch is all that is left in it, so a bounded retry cannot be written into
+// the blob -- it would need a counter to initialise, a decrement, and two branches, and there
+// is no executable range in `ClockDxe.efi` this file has been able to prove safe to write
+// into (its PE section table does not parse into a trustworthy code cave).  So the bound
+// lives here instead, in the tick handler that already knows how to find these two loops:
+// count the ticks that come while the program counter is parked in one of them, and once
+// that count passes the limit, aim the return from the interrupt at the instruction the
+// loop would have fallen through to had hardware ever answered.
+//
+// That is only legal because of how the vector table leaves.  `ExceptionSupport.S` builds an
+// `EFI_SYSTEM_CONTEXT_AARCH64` on the stack, points the handler at it, and *after* the
+// handler returns reloads the pair it stored first (`ldp x29, x30, [x28]`) and writes it
+// back with `msr elr_el1, x29` before the `eret`.  The saved link register is therefore read
+// from memory that the handler is allowed to change, which makes `Context->ELR` a supported
+// way to retarget an interrupted instruction -- not a hack against the ABI.  Everything else
+// about the resumed context is untouched: the same x8, x9, x10 and x30 the loop was holding,
+// so falling through looks exactly like a latch that finally completed.
+//
+// The four addresses below the loop entry are matched to the byte, not to the bucket,
+// because a 32-byte bucket also contains the loop's own exit: 0xa784's bucket runs through
+// 0xa79f, which is where the code that was waited for lives.
+//
+#define CLOVER_TICK_UPDATE_LDR   0xab14  // `ldr w9, [x8]`  -- the update handshake's read
+#define CLOVER_TICK_UPDATE_TBNZ  0xab18  // `tbnz w9,#0,0xab14`
+#define CLOVER_TICK_UPDATE_EXIT  0xab1c  // `ret`, reached when bit 0 clears
+#define CLOVER_TICK_STATUS_LDR   0xa784  // `ldr w9, [x10]` -- the status wait's read
+#define CLOVER_TICK_STATUS_TBZ   0xa788  // `tbz w9,#31,0xa784`
+#define CLOVER_TICK_STATUS_EXIT  0xa78c  // the first instruction after the wait
+
+// One millisecond per tick, so two hundred of them is a fifth of a second spent in a loop
+// whose hardware answer, if it were coming, would have come within tens of microseconds --
+// round 18 measured this latch as never arriving at all.  Twenty times slower than any real
+// latch keeps the instrument from cutting a legitimate wait short; two hundred ms per bad
+// clock keeps the whole screen from taking minutes if every one of this driver's records
+// fails the same way.
+#define CLOVER_TICK_PARK_LIMIT   200
+
 // In address mode the same twelve rows carry bits 16..27 of the polled register: 64 KiB
 // granularity, which is exactly the resolution that separates this SoC's clock controllers
 // (GCC 0x0010_0000, CAM 0x00AA_C000, VIDEO 0x00AB_0000, MDSS 0x00AE_0000, Turing 0x01C4_0000
@@ -1118,12 +1157,14 @@ FaultSeen (
 #define CLOVER_TICK_REG_SHIFT_MIN  4          // the narrow reading's finest bit
 
 //
-// Which of the two polls the sample came from, because "nobody is home" has a different
-// word for each.  The update poll at 0xab14 spins while bit 0 stays set, so an all-ones
-// read is the dead signature and an all-zero read is impossible; the status poll at 0xa784
-// spins while bit 31 stays clear, so it is the other way round.  Both loops load into w9,
-// so the value the handler samples is the one in the interrupted context, and no second
-// MMIO read -- which would have to be justified all over again -- is needed.
+// Which of the two polls the sample came from, because the bit each one waits on is the
+// other one's opposite: the update poll at 0xab14 spins while bit 0 stays set, and the
+// status poll at 0xa784 spins while bit 31 stays clear.  Round 21 used that to ask whether
+// the block answers at all -- both loops load into w9, so the value sampled is already in
+// the interrupted context and no second MMIO read, which would have to be justified all
+// over again, was needed.  Round 22 keeps the same register for a different reason: the
+// watchdog only cuts a loop short while the tested bit still says "keep waiting", so an
+// interrupt that lands on the iteration about to fall through naturally is left alone.
 //
 #define CLOVER_TICK_KIND_NONE    0
 #define CLOVER_TICK_KIND_UPDATE  1
@@ -1152,15 +1193,21 @@ STATIC CONST struct {
   { 15, CLOVER_COLOR_RED,     0, "a tick arrived, with its PC outside that image"   },
   { 15, CLOVER_COLOR_YELLOW,  0, "the twelve rows are the polled register, not the PC" },
   //
-  // The two round-21 flags, kept after the twelve bit rows rather than in their ladder
-  // order because the paint loop addresses bit rows by index -- entries 0..11 are the
-  // twelve bits in all three tables, and anything inserted among them would misalign the
-  // address tables that share that indexing.  Their rows are ChipInfo (+0x300000) and the
-  // clock protocol (+0x340000), the two slots the index meter makes redundant.
+  // Round 21's width flag, kept after the twelve bit rows rather than in their ladder order
+  // because the paint loop addresses bit rows by index -- entries 0..11 are the twelve bits
+  // in all three tables, and anything inserted among them would misalign the address tables
+  // that share that indexing.  Its row is ChipInfo (+0x300000), one of the slots the index
+  // meter makes redundant.
   //
-  {  7, CLOVER_COLOR_YELLOW,  0, "the twelve rows are a 16-byte offset inside MMCC" },
-  {  8, CLOVER_COLOR_RED,     0, "the polled word reads the dead pattern for this poll" },
-  {  8, CLOVER_COLOR_YELLOW,  0, "the polled word is a real value, the block answers" }
+  // Round 21's other flag, on the clock protocol's row (+0x340000), is gone, and that is a
+  // reading rather than a loss: round 21's photograph answered its question (yellow -- the
+  // block drives real data, so nothing is missing on the bus side), and round 22 asks a
+  // question only that row can answer.  The slot is being handed back so that when
+  // `ClockDxe` finally reaches the end of its entry point, the protocol it installs paints
+  // the band itself.  `SlotIsLent` is a scan of this table, so deleting the two entries is
+  // what un-borrows the row; no flag in the notify path is needed.
+  //
+  {  7, CLOVER_COLOR_YELLOW,  0, "the twelve rows are a 16-byte offset inside MMCC" }
 };
 
 //
@@ -1219,9 +1266,11 @@ STATIC UINTN                               mTickRegShown;
 STATIC BOOLEAN                             mTickAddressShown;
 STATIC UINT32                              mTickArrivedShown;
 STATIC UINT32                              mTickShownMask;
-STATIC UINTN                               mTickFlagsShown;   // row 7 and row 8, as offsets
+STATIC UINTN                               mTickWidthShown;   // row 7, as an offset or not
 STATIC EFI_HARDWARE_INTERRUPT_PROTOCOL     *mInterrupt;
 STATIC UINT64                              mTickTicks;
+STATIC UINTN                               mTickParkKind;     // which loop mTickParkCount is
+STATIC UINTN                               mTickParkCount;    // ticks taken inside it
 STATIC EFI_EVENT                           mTickEvent;
 STATIC VOID                                *mTickRegistration;
 
@@ -1290,7 +1339,8 @@ PaintTick (
 }
 
 /**
-  The timer-interrupt callback: one sample of where the core is stuck.
+  The timer-interrupt callback: one sample of where the core is stuck, and, from round 22,
+  the only clock in this firmware that can say a vendor loop has waited long enough.
 
   Returns, unlike FaultSeen.  It has to: the instruction the tick interrupted is not
   broken, it is just not done, and ERET is the only way to keep the loop running long
@@ -1299,6 +1349,11 @@ PaintTick (
   the middle of a dispatch loop that is not expecting anything -- and the compare write is
   what keeps the instrument alive: this handler has replaced the one that used to reload
   the timer, so without it there is exactly one sample and then silence.
+
+  It writes one thing: `Context->ELR`, and only when the same unbounded poll has been
+  sampled CLOVER_TICK_PARK_LIMIT times in a row.  That is not a side effect of the
+  instrument -- the frame this handler is handed is the frame the vector table returns
+  from, which is what makes an interrupt able to retarget the interrupted thread at all.
 **/
 STATIC
 VOID
@@ -1317,12 +1372,12 @@ TickSeen (
   UINTN                       Value;
   UINTN                       Shift;
   UINTN                       Kind;
-  UINTN                       Flags;
+  UINTN                       BailTo;
   UINT32                      Word;
   UINT32                      Argb;
   BOOLEAN                     AddressMode;
   BOOLEAN                     Narrow;
-  BOOLEAN                     Dead;
+  BOOLEAN                     Waiting;
 
   // End of interrupt first, the way ArmTimerDxe does it, so a repaint of a 128 KiB band
   // cannot make the next tick be missed, and the timer is re-armed whether or not this
@@ -1379,6 +1434,8 @@ TickSeen (
     its GDSCs are laid out on, and adds the one fact an offset cannot give by itself:
     whether the word the loop is testing is a value at all.  Both polls load into w9, so
     the interrupted context already holds it and no second MMIO read is needed to ask.
+    Round 22 reads that same word for a different purpose -- to be sure it is not cutting
+    a wait short on the iteration where hardware had finally answered.
   */
   Reg  = 0;
   Word = 0;
@@ -1391,6 +1448,56 @@ TickSeen (
     Reg  = (UINTN)Context->X10;
     Word = (UINT32)Context->X9;
     Kind = CLOVER_TICK_KIND_STATUS;
+  }
+
+  /*
+    Round 22: the bound the blob does not have.
+
+    The two loops above wait on a hardware acknowledgement that this unit has never, in
+    nineteen photographs, been seen to give.  A third of the panel is therefore spent
+    deciding whether the boot can get past `ClockDxe` at all, and the only way to find out
+    without rewriting a vendor binary is to stop the wait from the outside.  The tick
+    handler is already inside this machine's interrupt path and already recognises these
+    two loops to the byte, so it counts how many milliseconds it has been sitting in one of
+    them and, past the limit, aims the interrupt return at that loop's own exit.
+
+    Two things make this safe rather than merely creative.  The exit path re-reads the saved
+    link register from the frame this handler is handed, so `Context->ELR` is the supported
+    way to change where an interrupt returns to; and the cut happens only while the tested
+    bit still asks for another iteration, so a sample that lands on the pass that was about
+    to fall through on its own leaves it alone.
+
+    What it does *not* do is fix the clock.  The RCGR's CMD_REG bit 0 is left set, the latch
+    never completes, and whatever the caller configures next is configured against a
+    generator that is still in the state the blob found it in.  That is the price of this
+    round, and it is paid on purpose: the question is whether the dispatch loop is starved
+    by this one handshake or by something behind it, and no reading of the panel will answer
+    that while the CPU is parked here.
+  */
+  BailTo  = 0;
+  Waiting = FALSE;
+  if (Kind == CLOVER_TICK_KIND_UPDATE) {
+    if ((Delta == CLOVER_TICK_UPDATE_LDR) || (Delta == CLOVER_TICK_UPDATE_TBNZ)) {
+      BailTo  = CLOVER_TICK_UPDATE_EXIT;
+      Waiting = (Word & 0x00000001u) != 0;
+    }
+  } else if (Kind == CLOVER_TICK_KIND_STATUS) {
+    if ((Delta == CLOVER_TICK_STATUS_LDR) || (Delta == CLOVER_TICK_STATUS_TBZ)) {
+      BailTo  = CLOVER_TICK_STATUS_EXIT;
+      Waiting = (Word & 0x80000000u) == 0;
+    }
+  }
+
+  if (Waiting && (Kind == mTickParkKind)) {
+    mTickParkCount++;
+  } else {
+    mTickParkKind  = Kind;
+    mTickParkCount = Waiting ? 1 : 0;
+  }
+
+  if (Waiting && (mTickParkCount >= CLOVER_TICK_PARK_LIMIT)) {
+    Context->ELR   = mLastImageBase + BailTo;
+    mTickParkCount = 0;
   }
 
   // Only a sample that knows which register a poll is waiting on can claim address mode.
@@ -1409,31 +1516,18 @@ TickSeen (
   Narrow = AddressMode &&
            ((Reg >> CLOVER_TICK_ADDR_SHIFT_MIN) == CLOVER_TICK_BLOCK_MMCC);
 
-  // The dead pattern is per poll, because each loop can only be spinning on the other
-  // one's: an update poll waits for bit 0 to clear, so a block that answers nothing reads
-  // all ones, while a status poll waits for bit 31 to come up, so the same block reads all
-  // zeros.  Either says the bus transaction completed and no device drove the data.
-  Dead = AddressMode &&
-         (((Kind == CLOVER_TICK_KIND_UPDATE) && (Word == 0xFFFFFFFFu)) ||
-          ((Kind == CLOVER_TICK_KIND_STATUS) && (Word == 0u)));
-
   Argb = AddressMode ? CLOVER_COLOR_YELLOW : CLOVER_COLOR_CYAN;
   if (mTickArrivedShown != Argb) {
     mTickArrivedShown = Argb;
     PaintTick (AddressMode ? CLOVER_TICK_ADDR_MODE : CLOVER_TICK_ARRIVED);
   }
 
-  // The two flag rows move together and only inside address mode, so one comparison over
-  // all three states decides whether this sample has to touch them at all.  Outside
-  // address mode both go back to black, which is also their honest reading: a sample that
-  // never looked at a register has nothing to say about whether it answered.
-  Flags   = (UINTN)((AddressMode ? 1u : 0u) | (Narrow ? 2u : 0u) | (Dead ? 4u : 0u));
-  if (Flags != mTickFlagsShown) {
-    mTickFlagsShown = Flags;
+  // The width flag is the last thing this handler paints on a borrowed row, and only that
+  // one row: round 21's second flag, which sat on the clock protocol's band, has been given
+  // back so that a driver that gets as far as installing its protocol says so itself.
+  if (Narrow != (mTickWidthShown != 0)) {
+    mTickWidthShown = Narrow ? 1u : 0u;
     PaintTickAs (CLOVER_TICK_WIDTH_FLAG, Narrow ? CLOVER_COLOR_YELLOW : CLOVER_COLOR_BLACK);
-    PaintTickAs (CLOVER_TICK_DEAD_FLAG,
-                 !AddressMode ? CLOVER_COLOR_BLACK :
-                 (Dead ? CLOVER_COLOR_RED : CLOVER_COLOR_YELLOW));
   }
 
   if (AddressMode) {

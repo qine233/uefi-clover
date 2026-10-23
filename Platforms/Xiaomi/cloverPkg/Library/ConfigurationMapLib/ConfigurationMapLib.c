@@ -29,8 +29,6 @@
 
 #include <Library/ConfigurationMapLib.h>
 
-#include "../../Include/Checkpoint.h"
-
 STATIC
 EFI_CONFIGURATION_ENTRY_DESCRIPTOR
 gConfigurationDescriptor[] = {
@@ -69,18 +67,6 @@ GetConfigurationMap (
   OUT EFI_CONFIGURATION_ENTRY_DESCRIPTOR **ConfigurationDescriptor,
   OUT UINT8                               *ConfigurationDescriptorCount)
 {
-  STATIC UINTN  mCalls;
-
-  // Pass Data
   *ConfigurationDescriptor      = gConfigurationDescriptor;
   *ConfigurationDescriptorCount = ARRAY_SIZE (gConfigurationDescriptor);
-
-  // Stage 2 of Include/Checkpoint.h.  This library is linked into both Sec and
-  // PlatformPeiLib, so the first caller is whichever of them runs first and a
-  // yellow bar alone does not prove PEI was reached -- which is why stage 1 is a
-  // different module.  Round 10 never showed yellow; treat this band as a bonus,
-  // not as a stage boundary.
-  if (mCalls++ == 0) {
-    CloverCheckpointBar (0x00080000, CLOVER_COLOR_YELLOW);
-  }
 }

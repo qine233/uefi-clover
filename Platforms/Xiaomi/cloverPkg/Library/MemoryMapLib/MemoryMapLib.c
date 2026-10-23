@@ -40,8 +40,6 @@
 
 #include <Library/MemoryMapLib.h>
 
-#include "../../Include/Checkpoint.h"
-
 STATIC
 EFI_MEMORY_REGION_DESCRIPTOR
 gMemoryDescriptor[] = {
@@ -105,16 +103,6 @@ GetMemoryMap (
   OUT EFI_MEMORY_REGION_DESCRIPTOR **MemoryDescriptor,
   OUT UINT8                         *MemoryDescriptorCount)
 {
-  STATIC UINTN  mCalls;
-
-  // Pass Data
   *MemoryDescriptor      = gMemoryDescriptor;
   *MemoryDescriptorCount = ARRAY_SIZE (gMemoryDescriptor);
-
-  // Stage 1 of Include/Checkpoint.h.  The first caller is MemoryInitPeiLib, which
-  // is PEI building the resource HOBs, so a green bar here means we got out of SEC.
-  // Later callers (MemoryMapHelperLib from DXE) hit the same guard and leave it.
-  if (mCalls++ == 0) {
-    CloverCheckpointBar (0x00040000, CLOVER_COLOR_GREEN);
-  }
 }

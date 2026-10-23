@@ -18,10 +18,6 @@ APRIORI DXE {
   INF MdeModulePkg/Core/Dxe/DxeMain.inf
   INF MdeModulePkg/Universal/PCD/Dxe/Pcd.inf
 
-  # The checkpoint bars of Include/Checkpoint.h: third, so the magenta bar means
-  # the DXE core dispatched an ordinary driver before any vendor blob had a turn.
-  INF cloverPkg/Drivers/CheckpointDxe/CheckpointDxe.inf
-
   INF Binaries/clover/QcomPkg/Drivers/EnvDxe/EnvDxe.inf
 
   INF MdeModulePkg/Universal/ReportStatusCodeRouter/RuntimeDxe/ReportStatusCodeRouterRuntimeDxe.inf

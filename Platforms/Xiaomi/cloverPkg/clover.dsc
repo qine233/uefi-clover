@@ -111,15 +111,6 @@
 
 [Components]
   #
-  # The checkpoint bars of Include/Checkpoint.h.  APRIORI.inc and DXE.inc put it in
-  # the firmware volume, but EDK2 only builds a module it sees in [Components]:
-  # "Module ... NOT found in DSC file; Is it really a binary module?" is the failure
-  # (measured), which is also why the vendor blobs work -- they are declared in
-  # QcomPkg.dsc.inc, not in the FDF.
-  #
-  cloverPkg/Drivers/CheckpointDxe/CheckpointDxe.inf
-
-  #
   # The GOP the vendor display blob never publishes.  Without it
   # GraphicsConsoleDxe cannot start and a UEFI application has no surface to
   # draw a menu on -- see the file header for the GUID scan that settled it.

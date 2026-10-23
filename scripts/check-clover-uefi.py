@@ -927,12 +927,28 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
         problems.append("board.toml [bootimg.image] base must stay 0: the stock headers keep the "
                         "0x80000000 DRAM base out of the kernel_addr, ramdisk_addr and tags_addr "
                         "slots, and adding it here would double it against what the ABL applies")
+    #
+    # The stock device tree already carries /reserved-memory/splash_region@9d400000
+    # with this window, and the boot image appends that tree.  fdtput -c cannot create
+    # a node that exists, so [[bootimg.dtb_node]] may only add missing regions; what
+    # matters is that the tree the image carries names the address the firmware
+    # reserves.  Either source satisfies the requirement.
+    #
     dtb_nodes = board.get("bootimg", {}).get("dtb_node", [])
     splash_row = map_rows.get("Display Reserved") if map_rows else None
-    quoted = re.findall(r"0x[0-9a-fA-F]+", str(dtb_nodes))
-    if splash_row and f"0x{SPLASH_BASE:x}" not in [v.lower() for v in quoted]:
-        problems.append("board.toml's [[bootimg.dtb_node]] splash reg does not name "
-                        f"0x{SPLASH_BASE:x}, the address MemoryMapLib reserves for the panel")
+    quoted = [v.lower() for v in re.findall(r"0x[0-9a-fA-F]+", str(dtb_nodes))]
+    if splash_row and f"0x{SPLASH_BASE:x}" not in quoted:
+        dts = REPO / "Resources" / "DTBs" / "clover.dts"
+        tree_text = dts.read_text(errors="replace") if dts.is_file() else ""
+        pattern = (rf"splash_region@{SPLASH_BASE:x}\s*\{{[^}}]*reg\s*=\s*<[^>]*"
+                   rf"0x{SPLASH_BASE:x}")
+        if re.search(pattern, tree_text, re.I | re.S):
+            note("*", f"the appended device tree already declares splash_region@"
+                      f"{SPLASH_BASE:x}, so no [[bootimg.dtb_node]] is needed")
+        else:
+            problems.append("neither board.toml [[bootimg.dtb_node]] nor Resources/DTBs/"
+                            f"clover.dts names the 0x{SPLASH_BASE:x} splash window that "
+                            "MemoryMapLib reserves for the panel")
     if map_rows:
         check_adt(unixnu, map_rows, problems, warnings)
     note("*", f"cross-checked against {unixnu}")

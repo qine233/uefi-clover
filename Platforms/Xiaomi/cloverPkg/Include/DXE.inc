@@ -14,12 +14,6 @@
   INF MdeModulePkg/Core/RuntimeDxe/RuntimeDxe.inf
   INF MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf
 
-  # Stage 3 of Include/Checkpoint.h, the black pass that draws the rest of the
-  # ladder, the seven index bands below it and the three marks under those;
-  # APRIORI.inc starts it third so the magenta bar means the DXE core reached an
-  # ordinary driver.
-  INF cloverPkg/Drivers/CheckpointDxe/CheckpointDxe.inf
-
   INF Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
 
   INF MdeModulePkg/Universal/WatchdogTimerDxe/WatchdogTimer.inf

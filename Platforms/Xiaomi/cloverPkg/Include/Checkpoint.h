@@ -82,6 +82,50 @@
   band of either in the middle of the ladder would move the fit and misplace every band
   below it.
 
+  Round 17 was read, and it returned the spin case: the mark lit, none of the seven.  That
+  made "where inside the module" the next question, and the module's own disassembly says
+  the loops it is stuck in have no counters -- so the same seven rows are borrowed a third
+  time, this round for a sample of the program counter taken from a timer interrupt.  The
+  row at +0x4C0000 decides which of the two readings a photograph is in: **white** means
+  this driver holds the timer's tick and the rows below are the tick's, **cyan** means a
+  translation fault overwrote it and the whole table above is live.  When it is white:
+
+    +0x380000 yellow   tick PC page, bit 4    \
+    +0x3C0000 yellow   tick PC page, bit 3     |  five bits of (ELR - last image base) >> 12,
+    +0x400000 yellow   tick PC page, bit 2     |  so which 4 KiB of the module the meter
+    +0x440000 yellow   tick PC page, bit 1     |  already named the core was sitting in
+    +0x480000 yellow   tick PC page, bit 0    /
+    +0x4C0000 white    the timer's GIC source is ours, taken from ArmTimerDxe by removing
+                       its handler and registering this driver's in its place
+    +0x500000 cyan     a tick arrived with its PC inside that image
+    +0x500000 red      a tick arrived with its PC outside it, which says the loop is in a
+                       library the core linked rather than in the module the index names
+
+  White lit and +0x500000 dark is the other answer, and it is not a failure of the
+  instrument: the only way a tick can be registered and never arrive is for the loop to run
+  with interrupts masked, which is a driver stuck at high TPL rather than a hardware bit
+  that never sets.  Dark at +0x4C0000 with the exception mark lit is the third case, and it
+  says the timer's source was never taken, so the rows below belong to nothing and the
+  round reads like round 17.
+
+  The tick is taken from the interrupt controller rather than from the CPU's exception
+  slots, and that is not a style choice.  ArmGicDxe registers its own dispatcher into
+  EXCEPT_AARCH64_IRQ on the CPU arch protocol as the last step before it installs
+  EFI_HARDWARE_INTERRUPT_PROTOCOL, and if the registration fails it returns the error and
+  installs nothing -- so a driver that took the IRQ slot first would take it from ten blobs
+  that wait on that protocol and from ArmTimerDxe, which asserts on it.  That round would
+  hang somewhere else and every band would be describing that other hang.  Taking the
+  timer's INTID instead leaves the GIC's dispatcher in place: the tick still arrives at the
+  IRQ vector, the dispatcher still acknowledges it, and only the handler at the end of the
+  table has changed.
+
+  What it costs is still real, and it is one thing: ArmTimerDxe's handler is what reloads
+  the compare value and calls the DXE core's timeout notify.  This handler reloads the
+  compare, so the ticks keep coming, and does not call the notify, so event timeouts stop
+  being processed for everything APRIORI-queued after line 32.  ArmTimerDxe's own band
+  (slot 5, +0x280000) stays lit, because its protocol really did install -- the ladder is
+  meant to read like round 17's, with the difference confined to these seven rows.
+
   Rounds 9 through 13 are the reason the table is this shape, and each of the three
   parts answers a reading that came back ambiguous.
 

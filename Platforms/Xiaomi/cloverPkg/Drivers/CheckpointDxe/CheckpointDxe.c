@@ -159,6 +159,15 @@
 #include <Protocol/Bds.h>
 #include <Protocol/Cpu.h>
 
+// Round 18's sampler hangs off the interrupt controller rather than the CPU.  The timer's
+// tick is a GIC INTID whose handler sits in a table ArmGicDxe owns, and taking that source
+// over is the only way to get a tick without dispossessing the GIC driver of the one CPU
+// exception slot it must have to install its protocol at all.
+#include <Protocol/HardwareInterrupt.h>
+#include <Library/ArmLib.h>
+#include <Library/ArmGenericTimerCounterLib.h>
+#include <Library/PcdLib.h>
+
 #include "../../Include/Checkpoint.h"
 
 //
@@ -187,10 +196,10 @@ STATIC EFI_GUID  mClockProtocolGuid = {
   0x241AFAE6, 0x885F, 0x4F6C, { 0xA7, 0xEA, 0xC2, 0x8E, 0xAB, 0x79, 0xC3, 0xE5 }
 };
 
-// EmbeddedPkg.dec: gHardwareInterruptProtocolGuid, which the timer waits on.
-STATIC EFI_GUID  mHardwareInterruptProtocolGuid = {
-  0x2890B3EA, 0x053D, 0x1643, { 0xAD, 0x0C, 0xD6, 0x48, 0x08, 0xDA, 0x3F, 0xF1 }
-};
+// The interrupt controller's protocol is the one EmbeddedPkg GUID this driver used to copy
+// out of the vendor tree by hand: round 18 consumes it, so the copy is gone and the band
+// below points at the declaration in EmbeddedPkg.dec instead.
+//
 
 //
 // Sixteen protocol slots, +0x140000 to +0x500000, each CLOVER_BAR_SIZE long, on the
@@ -242,7 +251,7 @@ STATIC CONST struct {
 
   // Lines 31, 32, 36 and 39:  the Qualcomm chain around the hang.  mHardwareInterrupt
   // is EmbeddedPkg.dec's gHardwareInterruptProtocolGuid, which the timer waits on.
-  { &mHardwareInterruptProtocolGuid,           0x00240000, CLOVER_COLOR_CYAN,  "ArmGicDxe (apriori 31)"                  },
+  { &gHardwareInterruptProtocolGuid,           0x00240000, CLOVER_COLOR_CYAN,  "ArmGicDxe (apriori 31)"                  },
   { &gEfiTimerArchProtocolGuid,                0x00280000, CLOVER_COLOR_CYAN,  "ArmTimerDxe (apriori 32)"                },
   { &mSmemProtocolGuid,                        0x002C0000, CLOVER_COLOR_RED,   "SmemDxe (apriori 36)"                    },
   { &mChipInfoProtocolGuid,                    0x00300000, CLOVER_COLOR_RED,   "ChipInfoDxe (apriori 39)"                },
@@ -876,6 +885,7 @@ FaultSeen (
   UINT64                      Elr;
   UINTN                       Ec;
   UINTN                       Dfsc;
+  UINTN                       Index;
 
   if (mFaultPainted) {
     for ( ; ;) {
@@ -884,6 +894,19 @@ FaultSeen (
   }
 
   mFaultPainted = TRUE;
+
+  // Round 18 paints the same seven bands with a tick's page bits and a white "the slot is
+  // ours", and a tick can arrive before the fault that follows it.  A reader then has to
+  // work out which layer a yellow band belongs to from the colour of one other band, which
+  // is a reading that can be wrong.  So the fault layer takes the whole band back the
+  // moment an exception is taken: black first, and after it only what this exception
+  // actually says.  Every tick row is a fault row, so this pass erases the tick layer
+  // completely, and in a build that never installed a tick it repaints seven bands that
+  // the entry point already made black.
+  for (Index = 0; Index < ARRAY_SIZE (mFaultBits); Index++) {
+    CloverCheckpointBar (mSlots[mFaultBits[Index].Row].Offset, CLOVER_COLOR_BLACK);
+  }
+
   PaintFault (CLOVER_FAULT_TAKEN);
 
   Context = SystemContext.SystemContextAArch64;
@@ -939,6 +962,197 @@ FaultSeen (
 }
 
 /**
+  Round 18: the same seven rows, read a second way -- where the PC actually is.
+
+  Round 17 answered "did it fault", and the answer was no: the handler mark lit and every
+  fault row stayed dark, so the queue is stuck in a loop rather than in an abort.  The
+  disassembly of the blob that names (ClockDxe, FVMAIN file 38) shows why waiting cannot
+  help -- seventeen of its backward branches contain a load and no add or sub, i.e. no
+  counter, and they are all of the shape `ldr w?, [x?]; tbz/tbnz w?, #bit, back` -- but it
+  cannot say *which* of the three polling functions the core is parked in, because this is
+  a DAL/HAL driver whose work goes through device-object function pointers loaded from
+  .data, so a static call graph from the entry reaches nineteen of its six hundred and
+  sixty-five functions.
+
+  What can say it is an interrupt, and the first design for getting one was wrong in a way
+  worth writing down, because it is the reason this layer looks the way it does.  The CPU
+  arch protocol's EXCEPT_AARCH64_IRQ slot is not free at APRIORI line 30: ArmGicDxe is line
+  31 and its entry ends in `GicCommonInstallAndRegisterInterruptService`, which registers
+  its own dispatcher into that slot and, if the registration fails, returns the error and
+  never installs EFI_HARDWARE_INTERRUPT_PROTOCOL at all.  Ten blobs wait on that protocol
+  and ArmTimerDxe asserts on it, so taking the slot first would not sample the round-17
+  boot -- it would be a different boot, hanging somewhere else, and every band on the
+  screen would be describing that one instead.
+
+  So the tick is taken one level down instead, where the GIC's own rules work in favour of
+  the instrument.  ArmGicDxe keeps a handler per INTID in `GicCommonRegisterInterruptSource`
+  and refuses to replace one it already has, so the way in is to remove ArmTimerDxe's
+  handler from the timer's source and put this one there.  The notification that does that
+  is registered on the timer arch protocol, which ArmTimerDxe installs as the last thing it
+  does before unmasking the counter: by the time this callback runs, the timer is armed, the
+  GIC keeps its CPU slot and its dispatcher, and the only thing that has changed is who the
+  tick is handed to.
+
+  The cost is the one a tick always has.  ArmTimerDxe's handler is what reloads the compare
+  and calls the DXE core's timeout notify, so from line 32 on, event timeouts are not
+  processed -- which is why this handler re-arms the compare itself, and why the reading is
+  only meaningful for the drivers queued behind it.  The clock that hangs is line 38, six
+  lines later, and `gBS->Stall` survives because it reads the counter rather than the tick.
+  ArmTimerDxe's own band, slot 5, stays lit: the protocol really did appear, and the ladder
+  therefore reads like round 17's at a glance, with the difference confined to the borrowed
+  rows.
+
+  The handler reads ELR out of the context the vector table left, which is the address the
+  spin was sitting at, and paints `(ELR - last image base) >> 12`: a five-bit page index
+  inside the module the meter already named, enough to place the PC anywhere in a 128 KiB
+  image to 4 KiB.  Two readings, and they are different findings.  A page number says which
+  function the loop is in, and the disassembly above already names the polls inside each.
+  The white row lit and the arrival row dark says the tick never came, which can only mean
+  the spin runs with interrupts masked -- a driver stuck at TPL_HIGH_LEVEL rather than a
+  bit that never sets, and a different bug class with a different fix.
+
+  Rows are shared with the fault layer, and the mode is readable rather than assumed: the
+  fault layer's first row is red and this one's page bits are yellow, and the fault layer's
+  row 14 is cyan where this one's is white.  A fault also wins the rows outright: FaultSeen
+  blacks the whole borrowed band before it reports, so a tick that arrived first cannot be
+  mistaken for a FAR range, and TickSeen checks mFaultPainted and stays out of the way.
+**/
+#define CLOVER_TICK_PAGE_FIRST  0
+#define CLOVER_TICK_PAGE_BITS   5
+#define CLOVER_TICK_OURS        5
+#define CLOVER_TICK_ARRIVED     6
+#define CLOVER_TICK_OUTSIDE     7
+
+// The four INTIDs ArmTimerDxe registers, in the order it registers them.  Copied rather
+// than read from its header because that header is private to its driver, and because the
+// values come from the same PCDs either way: 27 virtual, 26 hyp, 29 secure, 30 non-secure
+// physical at ArmPkg.dec's defaults, which no clover .dsc overrides.  Under a GICv5 the
+// same four come from the system-register encoding instead, which is what the branch in
+// TimerInitialize does; this board is GICv2, so the branch is here only so that a wrong
+// reading of it shows up as a dark row rather than as a silent nothing.
+#define CLOVER_GICV5_TIMER_HYP_INTID    0x2000001a
+#define CLOVER_GICV5_TIMER_VIRT_INTID   0x2000001b
+#define CLOVER_GICV5_TIMER_SEC_INTID    0x2000001d
+#define CLOVER_GICV5_TIMER_INTID        0x2000001e
+
+STATIC CONST struct {
+  UINTN    Row;
+  UINT32   Argb;
+  CHAR8    *Name;
+} mTickBits[] = {
+  {  9, CLOVER_COLOR_YELLOW, "tick PC page, bit 4 (the 64 KiB half of the image)" },
+  { 10, CLOVER_COLOR_YELLOW, "tick PC page, bit 3"                                },
+  { 11, CLOVER_COLOR_YELLOW, "tick PC page, bit 2"                                },
+  { 12, CLOVER_COLOR_YELLOW, "tick PC page, bit 1"                                },
+  { 13, CLOVER_COLOR_YELLOW, "tick PC page, bit 0"                                },
+  { 14, CLOVER_COLOR_WHITE,  "the timer's GIC source is ours"                     },
+  { 15, CLOVER_COLOR_CYAN,   "a tick arrived, with its PC inside that image"      },
+  { 15, CLOVER_COLOR_RED,    "a tick arrived, with its PC outside that image"     }
+};
+
+STATIC BOOLEAN                             mTickInstalled;
+STATIC BOOLEAN                             mTickArrived;
+STATIC BOOLEAN                             mTickOutsideShown;
+STATIC UINTN                               mTickPageShown;
+STATIC EFI_HARDWARE_INTERRUPT_PROTOCOL     *mInterrupt;
+STATIC UINT64                              mTickTicks;
+STATIC EFI_EVENT                           mTickEvent;
+STATIC VOID                                *mTickRegistration;
+
+/**
+  Paint one tick row.  The page bits are repainted only when the page changes, so a stable
+  spin writes each band once rather than a hundred and twenty-eight kilobytes a millisecond
+  for as long as the tablet is on -- and a value that does move across samples is itself
+  worth seeing, which a latch would hide.
+**/
+STATIC
+VOID
+PaintTick (
+  IN UINTN  Index
+  )
+{
+  CloverCheckpointBar (mSlots[mTickBits[Index].Row].Offset, mTickBits[Index].Argb);
+}
+
+/**
+  The timer-interrupt callback: one sample of where the core is stuck.
+
+  Returns, unlike FaultSeen.  It has to: the instruction the tick interrupted is not
+  broken, it is just not done, and ERET is the only way to keep the loop running long
+  enough to sample it again.  Nothing is allocated, no boot service is called and no
+  protocol is looked up, because this runs at whatever level the vector table raised, in
+  the middle of a dispatch loop that is not expecting anything -- and the compare write is
+  what keeps the instrument alive: this handler has replaced the one that used to reload
+  the timer, so without it there is exactly one sample and then silence.
+**/
+STATIC
+VOID
+EFIAPI
+TickSeen (
+  IN HARDWARE_INTERRUPT_SOURCE  Source,
+  IN EFI_SYSTEM_CONTEXT         SystemContext
+  )
+{
+  EFI_SYSTEM_CONTEXT_AARCH64  *Context;
+  UINT64                      Elr;
+  UINTN                       Page;
+  UINTN                       Bit;
+
+  // End of interrupt first, the way ArmTimerDxe does it, so a repaint of a 128 KiB band
+  // cannot make the next tick be missed, and the timer is re-armed whether or not this
+  // sample is worth painting: leaving it disarmed on the fault path would turn one tick
+  // into the last interrupt this machine ever took.
+  if (mInterrupt != NULL) {
+    mInterrupt->EndOfInterrupt (mInterrupt, Source);
+  }
+
+  ArmGenericTimerSetCompareVal (ArmGenericTimerGetSystemCount () + mTickTicks);
+  ArmGenericTimerReenableTimer ();
+
+  if (mFaultPainted) {
+    return;
+  }
+
+  Context = SystemContext.SystemContextAArch64;
+  if ((Context == NULL) || !mHaveLastImage) {
+    return;
+  }
+
+  Elr = Context->ELR;
+  if ((Elr < mLastImageBase) || (Elr >= (mLastImageBase + mLastImageSize))) {
+    // The loop is not in the module the index names.  That is a finding, not a failure:
+    // a blob can spin inside a library the core linked into it, and the index meter has
+    // no way to tell those apart on its own.  Latched for the same reason the arrival row
+    // is: this band says the same thing every time it is written.
+    if (!mTickOutsideShown) {
+      mTickOutsideShown = TRUE;
+      PaintTick (CLOVER_TICK_OUTSIDE);
+    }
+
+    return;
+  }
+
+  // The arrival row is painted once: a tick that came is a fact that does not change, and
+  // writing the band again a thousand times a second buys nothing.
+  if (!mTickArrived) {
+    mTickArrived = TRUE;
+    PaintTick (CLOVER_TICK_ARRIVED);
+  }
+
+  Page = (UINTN)((Elr - mLastImageBase) >> 12);
+  if (Page == mTickPageShown) {
+    return;
+  }
+
+  mTickPageShown = Page;
+  for (Bit = 0; Bit < CLOVER_TICK_PAGE_BITS; Bit++) {
+    if ((Page & (UINTN)(1u << (CLOVER_TICK_PAGE_BITS - 1 - Bit))) != 0) {
+      PaintTick (CLOVER_TICK_PAGE_FIRST + Bit);
+    }
+  }
+}
+
+/**
   ArmCpuDxe has appeared, so the exception slot can be taken.
 
   This runs at TPL_CALLBACK from a protocol notification, which is the first moment the
@@ -983,6 +1197,95 @@ CpuAppeared (
 
   mHandlerInstalled = TRUE;
   PaintMark (CLOVER_MARK_HANDLER);
+}
+
+/**
+  ArmTimerDxe has appeared, so its tick can be re-pointed at this driver.
+
+  The registration this fires from is the timer arch protocol, which ArmTimerDxe installs
+  near the end of its entry and unmasking the counter after -- so by the time this runs,
+  the four timer INTIDs are registered in the GIC's table, the compare value is loaded and
+  the counter is counting.  That ordering is the whole design: it is why the instrument
+  takes a source rather than the CPU exception slot, and why nothing earlier than line 32
+  has to be re-explained in the photograph.
+
+  Stealing a source is two calls, because ArmGicDxe will not overwrite a handler it already
+  has: `RegisterInterruptSource (Interrupt, Id, NULL)` removes ArmTimerDxe's and disables
+  the line, and the same call with TickSeen installs ours and re-enables it.  An INTID that
+  returns EFI_INVALID_PARAMETER to the first call had no handler, which means it was not
+  the timer's on this board, and it is left exactly as it was rather than enabled by
+  accident.
+**/
+STATIC
+VOID
+EFIAPI
+TimerAppeared (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  EFI_STATUS                        Status;
+  EFI_HARDWARE_INTERRUPT_PROTOCOL   *Interrupt;
+  UINT32                            Ids[4];
+  UINT64                            Freq;
+  UINTN                             Index;
+
+  if (mTickInstalled) {
+    return;
+  }
+
+  // Consume the registration either way, so a callback that keeps being queued cannot
+  // take the source back a second time behind this one.
+  DrainAndReport (&gEfiTimerArchProtocolGuid, mTickRegistration);
+
+  Interrupt = NULL;
+  Status    = gBS->LocateProtocol (&gHardwareInterruptProtocolGuid, NULL, (VOID **)&Interrupt);
+  if (EFI_ERROR (Status) || (Interrupt == NULL) || (Interrupt->RegisterInterruptSource == NULL)) {
+    // Without the GIC's protocol there is nobody to take the source from, and the white
+    // row staying dark is the honest record of that.  It is also a reading: ArmGicDxe is
+    // APRIORI line 31 and the timer is 32, so a timer that appeared with no interrupt
+    // controller behind it means the queue got here by a route the ladder does not show.
+    return;
+  }
+
+  if (ArmHasGicV5SystemRegisters ()) {
+    Ids[0] = CLOVER_GICV5_TIMER_VIRT_INTID;
+    Ids[1] = CLOVER_GICV5_TIMER_HYP_INTID;
+    Ids[2] = CLOVER_GICV5_TIMER_SEC_INTID;
+    Ids[3] = CLOVER_GICV5_TIMER_INTID;
+  } else {
+    Ids[0] = PcdGet32 (PcdArmArchTimerVirtIntrNum);
+    Ids[1] = PcdGet32 (PcdArmArchTimerHypIntrNum);
+    Ids[2] = PcdGet32 (PcdArmArchTimerSecIntrNum);
+    Ids[3] = PcdGet32 (PcdArmArchTimerIntrNum);
+  }
+
+  for (Index = 0; Index < ARRAY_SIZE (Ids); Index++) {
+    if (Ids[Index] == 0) {
+      continue;
+    }
+
+    if (EFI_ERROR (Interrupt->RegisterInterruptSource (Interrupt, Ids[Index], NULL))) {
+      continue;
+    }
+
+    if (!EFI_ERROR (Interrupt->RegisterInterruptSource (Interrupt, Ids[Index], TickSeen))) {
+      mTickInstalled = TRUE;
+    }
+  }
+
+  if (!mTickInstalled) {
+    return;
+  }
+
+  // One millisecond of counter, which is a sample every thousand ticks of a megahertz clock
+  // and fast enough that a bounded loop is caught in the same page over and over.  The
+  // frequency comes from the same library instance ArmTimerDxe uses, so the compare values
+  // written here and the counter it reads cannot disagree.
+  mInterrupt  = Interrupt;
+  Freq        = ArmGenericTimerGetTimerFreq ();
+  mTickTicks  = (Freq != 0) ? (Freq / 1000) : 20000;
+  PaintTick (CLOVER_TICK_OURS);
 }
 
 EFI_STATUS
@@ -1091,6 +1394,27 @@ CheckpointDxeEntry (
                           &mCpuRegistration
                           ))) {
       CpuAppeared (mCpuEvent, NULL);
+    }
+  }
+
+  // And the sampler, which waits on the timer rather than on the CPU: the tick has to be
+  // taken from a driver that has already finished arming the counter, and ArmTimerDxe is
+  // APRIORI line 32.  Drained at entry too, in case the queue ever reaches the timer before
+  // this driver -- on a build where the timer protocol is already installed, the notify
+  // would otherwise never run and the white row would lie about a slot nobody took.
+  if (!EFI_ERROR (gBS->CreateEvent (
+                        EVT_NOTIFY_SIGNAL,
+                        TPL_CALLBACK,
+                        TimerAppeared,
+                        NULL,
+                        &mTickEvent
+                        ))) {
+    if (!EFI_ERROR (gBS->RegisterProtocolNotify (
+                          &gEfiTimerArchProtocolGuid,
+                          mTickEvent,
+                          &mTickRegistration
+                          ))) {
+      TimerAppeared (mTickEvent, NULL);
     }
   }
 

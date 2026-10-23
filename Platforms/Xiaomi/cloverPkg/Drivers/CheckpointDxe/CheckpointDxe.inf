@@ -26,6 +26,16 @@
 #  report goes into bands the boot was never going to use -- see mFaultBits in the C
 #  file for why those seven rows are free and what the reading is for.
 #
+#  Round 18 spends the dependency this file was proud of not having.  Sampling where a
+#  stuck loop is sitting needs an interrupt, and the only interrupt this build can take
+#  without changing the boot is ArmTimerDxe's tick, which arrives through the GIC's source
+#  table rather than through the CPU's exception slots -- ArmGicDxe owns the one CPU IRQ
+#  slot and refuses to install its protocol if it cannot have it.  So this driver consumes
+#  EFI_HARDWARE_INTERRUPT_PROTOCOL and the generic timer library, which is four calls: take
+#  the timer's INTID down, put this driver's handler in its place, read the counter, and
+#  write the compare again on every sample.  See mTickBits for what those bands mean, and
+#  for the one thing the round gives up: event timeouts after line 32.
+#
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
 
@@ -40,6 +50,8 @@
 [Packages]
   MdePkg/MdePkg.dec
   MdeModulePkg/MdeModulePkg.dec
+  ArmPkg/ArmPkg.dec
+  EmbeddedPkg/EmbeddedPkg.dec
 
 [Sources]
   CheckpointDxe.c
@@ -48,6 +60,9 @@
   UefiDriverEntryPoint
   UefiBootServicesTableLib
   BaseMemoryLib
+  ArmLib
+  ArmGenericTimerCounterLib
+  PcdLib
 
 [Protocols]
   gEfiFirmwareVolume2ProtocolGuid   ## CONSUMES
@@ -62,6 +77,13 @@
   gEfiPartitionInfoProtocolGuid     ## CONSUMES
   gEfiGraphicsOutputProtocolGuid    ## CONSUMES
   gEfiBdsArchProtocolGuid           ## CONSUMES
+  gHardwareInterruptProtocolGuid  ## CONSUMES
+
+[Pcd]
+  gArmTokenSpaceGuid.PcdArmArchTimerVirtIntrNum  ## CONSUMES
+  gArmTokenSpaceGuid.PcdArmArchTimerHypIntrNum   ## CONSUMES
+  gArmTokenSpaceGuid.PcdArmArchTimerSecIntrNum   ## CONSUMES
+  gArmTokenSpaceGuid.PcdArmArchTimerIntrNum      ## CONSUMES
 
 [Depex]
   TRUE

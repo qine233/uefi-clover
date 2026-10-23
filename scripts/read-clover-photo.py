@@ -262,9 +262,9 @@ def bands_of(classes):
     return out
 
 
-def faults(path):
-    """Parse the exception table: { N, CLOVER_COLOR_X, "what it says" }, where N is a row
-    of the protocol slot table rather than an offset.
+def faults(path, table="mFaultBits"):
+    """Parse one of the borrowed-row tables: { N, CLOVER_COLOR_X, "what it says" }, where
+    N is a row of the protocol slot table rather than an offset.
 
     Round 17 borrows the seven slot rows below the clock, because a boot that stops inside
     a driver never reaches those protocols and their bands are dark on every screen that
@@ -274,14 +274,24 @@ def faults(path):
     two meanings the photograph is showing.  Green and magenta never appear here, and that
     is not a coincidence -- those two colours are what the fit is anchored on, and a second
     band of either would move the geometry.
+
+    Round 18 borrows the same seven rows a third time, for a timer tick's program counter,
+    and says so in `mTickBits`.  Which of the two a photograph shows is decided by colour
+    rather than by assumption: the fault layer's first row is red and the tick's page bits
+    are yellow, and the row at +0x4C0000 is white for the tick and cyan for a translation
+    fault.  Both tables are parsed here and the reader picks.
     """
     rows = slots(path)
+    src = path.read_text(encoding="utf-8")
+    head = src.find(table + "[] = {")
+    if head < 0:
+        return []
+    body = src[head:src.find("\n};", head)]
     out = []
-    for m in re.finditer(r"\{\s*(\d+)\s*,\s*(CLOVER_COLOR_\w+)\s*,\s*\"([^\"]+)\"",
-                         path.read_text(encoding="utf-8")):
+    for m in re.finditer(r"\{\s*(\d+)\s*,\s*(CLOVER_COLOR_\w+)\s*,\s*\"([^\"]+)\"", body):
         row = int(m.group(1))
         if row >= len(rows):
-            raise SystemExit("a fault row names slot %d and the table has %d" % (row, len(rows)))
+            raise SystemExit("a %s row names slot %d and the table has %d" % (table, row, len(rows)))
         out.append({"off": rows[row]["off"], "row": row,
                     "want": NAME_BY_COLOR[m.group(2)], "name": m.group(3)})
     return out
@@ -319,6 +329,12 @@ def build_ladder(driver):
             raise SystemExit("a fault row points at %#x, which is not a slot band" % entry["off"])
         band["fault"] = entry["name"]
         band["fault_want"] = entry["want"]
+    for entry in faults(Path(driver), "mTickBits"):
+        index = (entry["off"] - base) // pitch
+        band = ladder.get(index)
+        if band is None or band["kind"] != "slot":
+            raise SystemExit("a tick row points at %#x, which is not a slot band" % entry["off"])
+        band.setdefault("tick", []).append(entry)
     return ladder, pitch
 
 
@@ -653,26 +669,100 @@ def report(best, ladder, a):
         handler = [i for i in sorted(ladder)
                    if ladder[i]["kind"] == "mark" and ladder[i]["off"] == 0x007C0000]
         live = bool(handler) and bool(lit.get(handler[0]))
-        print("\n%s" % ("exception reading:" if live else
-                        "exception reading is NOT LIVE -- the mark at 0x007c0000 is dark, "
-                        "so either no CPU protocol appeared or something else already held "
-                        "the exception slot, and dark rows below prove nothing:"))
-        print("%-11s %-7s %-12s %-9s %s" % ("offset", "colour", "state", "seen", "also"))
-        set_bits = []
-        for i, s in fault_rows:
-            _y, seen = sample(i)
-            got = lit.get(i) or (seen if seen in LIT else None)
-            want = s["fault_want"]
-            state = "LIT" if got == want else ("dark" if not got else "WRONG(%s)" % got)
-            if got == want:
-                set_bits.append(s["fault"])
-            print("%#011x %-7s %-12s %-9s %s / %s" %
-                  (s["off"], want, state, seen, s["fault"], s["name"]))
-        if live and set_bits:
-            print("\nthe fault says: %s" % "; ".join(set_bits))
-        elif live:
-            print("\nthe handler is registered and no fault row is lit: whatever the index "
-                  "names did not abort, it is still inside a loop")
+
+        # Round 18 shares these seven rows, and which layer a photograph is showing is read
+        # off the band rather than assumed: the tick layer's "the slot is ours" row wants
+        # white where the fault layer's translation-fault row wants cyan.  A frame from
+        # before round 18 has no tick table at all and lands in the fault branch, which is
+        # what an old photograph means.
+        tick_rows = [(i, s) for i, s in fault_rows if s.get("tick")]
+        mode_row = next(((i, s) for i, s in tick_rows
+                         if any(t["want"] == "white" for t in s["tick"])), None)
+        mode = None
+        if live and mode_row is not None:
+            _y, seen_mode = sample(mode_row[0])
+            got_mode = lit.get(mode_row[0]) or (seen_mode if seen_mode in LIT else None)
+            if got_mode == "white":
+                mode = "tick"
+            elif got_mode == "cyan":
+                mode = "fault"
+
+        if mode == "tick":
+            print("\ntick reading -- this driver holds the timer interrupt, so the seven rows "
+                  "below the clock are the program counter, not the fault:")
+            print("%-11s %-7s %-12s %-9s %s" % ("offset", "colour", "state", "seen", "also"))
+            bits = []
+            arrived = None
+            for i, s in tick_rows:
+                _y, seen = sample(i)
+                # The same second chance the fault rows get: a band this narrow can fall
+                # between two detected runs, and "the tick never arrived" is exactly the
+                # reading that must not come from a detection miss.
+                got = lit.get(i) or (seen if seen in LIT else None)
+                entries = s["tick"]
+                entry = next((t for t in entries if t["want"] == got), entries[0])
+                # The arrival row is the one band the table gives two colours to -- cyan for
+                # a tick whose PC was inside the image, red for one outside -- so either of
+                # them on it is the tick speaking, not a wrong paint.
+                state = ("LIT" if got in [t["want"] for t in entries] else
+                         ("dark" if not got else "WRONG(%s)" % got))
+                if got:
+                    if entry["want"] in ("cyan", "red"):
+                        arrived = entry["want"]
+                    elif entry["want"] == "yellow":
+                        bits.append(i)
+                print("%#011x %-7s %-12s %-9s %s / %s" %
+                      (s["off"], entry["want"], state, seen, entry["name"], s["name"]))
+            if arrived is None:
+                print("\nthe slot is ours and no tick ever arrived: the loop is running with "
+                      "interrupts masked, which is a driver stuck at high TPL rather than a "
+                      "hardware bit that never sets")
+            else:
+                # Which bit of the page number a row carries comes from its place in the
+                # driver's table, most significant first: row 9 is bit 4 and row 13 is bit 0.
+                # The weight has to be counted over the five rows the table defines, not over
+                # the rows that happen to be lit -- page 0b11001 lights rows 9, 10 and 13, and
+                # compacting the three lit ones would decode it as 0b111.
+                page_rows = sorted(i for i, s in tick_rows
+                                   if any(t["want"] == "yellow" for t in s["tick"]))
+                page = 0
+                for j, i in enumerate(page_rows):
+                    if i in bits:
+                        page |= 1 << (len(page_rows) - 1 - j)
+                if arrived == "red":
+                    print("\nthe tick's PC was outside the image the index names, so the loop "
+                          "is in something else -- a library the core linked, or the core")
+                else:
+                    print("\nthe tick found the PC in page %d of that image, offset %#x..%#x "
+                          "of it (%d of the %d five-bit rows lit)" %
+                          (page, page * 0x1000, page * 0x1000 + 0xFFF,
+                           len(bits), len(page_rows)))
+        else:
+            print("\n%s" % ("exception reading:" if live else
+                            "exception reading is NOT LIVE -- the mark at 0x007c0000 is dark, "
+                            "so either no CPU protocol appeared or something else already held "
+                            "the exception slot, and dark rows below prove nothing:"))
+            print("%-11s %-7s %-12s %-9s %s" % ("offset", "colour", "state", "seen", "also"))
+            set_bits = []
+            for i, s in fault_rows:
+                _y, seen = sample(i)
+                got = lit.get(i) or (seen if seen in LIT else None)
+                want = s["fault_want"]
+                state = "LIT" if got == want else ("dark" if not got else "WRONG(%s)" % got)
+                if got == want:
+                    set_bits.append(s["fault"])
+                print("%#011x %-7s %-12s %-9s %s / %s" %
+                      (s["off"], want, state, seen, s["fault"], s["name"]))
+            if live and set_bits:
+                print("\nthe fault says: %s" % "; ".join(set_bits))
+            elif live:
+                print("\nthe handler is registered and no fault row is lit: whatever the index "
+                      "names did not abort, it is still inside a loop")
+                if mode_row is not None:
+                    print("the tick rows stayed dark too -- in a round-18 build that reads as "
+                          "interrupts masked during the loop, but an older build has no tick "
+                          "layer at all, so pass --driver <that round's CheckpointDxe.c> "
+                          "before believing this")
 
     if a.debug:
         peak = max(blueness)

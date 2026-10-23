@@ -107,8 +107,11 @@ APRIORI 条目启动时不评估 depex，所以它不依赖任何厂商 blob。
   `ClockDxe` 返回了。
 - **黄**：`CloverLadderBds` 在第 79 行、`BdsDxe` 之前 —— 黄色说明上面的存储和
   variable 一整块（DiskIo 到 HiiDatabase）都返回了。
-- **绿**：`CloverGopDxe`（第 122 行）发布 GOP 之后整屏涂绿，`GraphicsConsoleDxe`
-  也就能起来。
+- **黑条**：尾部太长，一级一个颜色试不起。`CloverTail1`～`CloverTail6` 依次排在
+  尾部六个分界之后，每个只在黄底上画一条黑横条（满宽、120 行高，行号
+  240/480/720/960/1200/1440）。数清楚有几条，就知道 dispatcher 过了第几个分界。
+- **绿**：`CloverGopDxe`（第 138 行）发布 GOP 之后整屏涂绿——绿会一次盖掉所有
+  黑条，那正是"整条尾巴都过了"的读法。`GraphicsConsoleDxe` 也就能起来。
 
 UniXNU 菜单会盖掉绿色。于是：
 
@@ -118,9 +121,19 @@ UniXNU 菜单会盖掉绿色。于是：
 | 红色 | DXE dispatcher 没走到 APRIORI 第 23 行：问题在 SEC/PEI 或 Pcd 之前 |
 | 品红 | 卡在第 24～52 行：`EnvDxe`、各 arch 驱动、Qcom blob，或 `ClockDxe` 自己 |
 | 青 | `ClockDxe` 已返回，卡在第 53～78 行：`DiskIo`、`Partition`、`SdccDxe`、`Fat`、`Variable`、`RTC`、`HiiDatabase` 这一段 |
-| 黄 | 存储和 variable 都过了，卡在第 80～121 行：TLMM 到 RNG 的厂商尾巴，或 console 栈 |
+| 黄，无黑条 | 存储和 variable 都过了，但 `BdsDxe` 自己的入口没返回 |
+| 黄 + 1 条 | `BdsDxe` 返回了，卡在 `TLMM` 到 `UsbfnDwc3` 这一段厂商驱动 |
+| 黄 + 2 条 | 卡在 `UsbBus`/`UsbKb`/`UsbMassStorage` |
+| 黄 + 3 条 | 卡在 `UsbMsd`/`UsbDevice`/`UsbConfig`/`Buttons`/`Tsens` |
+| 黄 + 4 条 | 卡在 `TzDxe`/`LimitsDxe`/`HashDxe`/`RngDxe` |
+| 黄 + 5 条 | 卡在串口 console 栈：`SimpleTextInOutSerial`/`ConPlatform`/`ConSplitter` |
+| 黄 + 6 条 | console 栈也过了，卡在 `CloverGopDxe` 自己（GOP 没发布） |
 | 绿色 | GOP 已发布，问题在 BDS 之后：UniXNU 的启动项、payload 或应用本身 |
 | 菜单 | Stage 1 达成 |
+
+黑条只报"调度顺序走到了哪里"：`[Depex] TRUE` 的探针即使前面的驱动因依赖未满足
+被跳过也会照常派发，所以条数不等于"这些驱动都成功了"，只等于"派发顺序已经越过
+它们的边界还没卡住"。真正卡死会停在某个驱动入口里，后面的条就不会出现。
 
 `BdsDxe` 自己进入 BDS 阶段不给颜色：它在这个 DXE 核里装的是 arch protocol，而
 `CoreRegisterProtocolNotify` 不会为已存在的协议触发回调，那样的通知只在协议被
@@ -226,8 +239,10 @@ python3 scripts/check-clover-uefi.py --checkout ~/mu-clover
 两个仓库之间：`[uefi_fd]` 大小、`UEFI FD` 行、ADT 的 `uefi_fd`、splash 窗口
 对 `Display Reserved` 行、ADT 每个保留区对内存图、`header_version`、
 `board.toml` 是否仍带 `UNIXNU_BUILD`，以及 `APRIORI.inc`/`DXE.inc` 里的每个
-`INF` 是否也在 `clover.dsc` 里声明。`inf` 把本叠加层 INF 的每个 `[Protocols]`
-GUID 对它自己在 `[Packages]` 里列的 `.dec` 文件解析一遍。
+`INF` 是否也在 `clover.dsc` 里声明；三段阶梯标记与六条尾部黑条的先后顺序也在这里
+钉死，还会核对每个 `CloverTailN.inf` 的 `-DCLOVER_TAIL_BAND` 是不是正好等于 N
+（否则两条探针会画在同一行，白白藏掉一个分界）。`inf` 把本叠加层 INF 的每个
+`[Protocols]` GUID 对它自己在 `[Packages]` 里列的 `.dec` 文件解析一遍。
 
 它跑在系统自带的 macOS Python 3.9 上（`tomllib`、`tomli`，或内置的子集解析器）。
 

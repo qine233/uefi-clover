@@ -805,6 +805,44 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
                       f"{early + 1}, {late + 1}, {bds + 1} (ClockDxe {clock + 1}, "
                       f"BdsDxe {bds_dxe + 1})")
 
+        # The bands mean nothing without their order: band N is dispatched after
+        # the block it reports on, so the six have to run in index order between
+        # BdsDxe and CloverGopDxe.  A band after the GOP would be painted over by
+        # green anyway, which is why the last one stops at the console stack.
+        tails = [mark(f"CloverTail{i}.inf") for i in range(1, 7)]
+        gop = mark("CloverGopDxe/CloverGopDxe.inf")
+        if any(position is None for position in tails) or gop is None:
+            problems.append("APRIORI.inc lost one of the six CloverTail bands or "
+                            "CloverGopDxe, so the tail can no longer be counted")
+        elif not (bds_dxe < tails[0]
+                  and all(left < right for left, right in zip(tails, tails[1:]))
+                  and tails[-1] < gop):
+            problems.append("APRIORI.inc puts the tail bands out of order; they have "
+                            "to run Tail1..Tail6 between BdsDxe and CloverGopDxe, "
+                            "each one below the block it reports on")
+        else:
+            note("*", "APRIORI.inc counts the tail with bands at lines "
+                      + ", ".join(str(position + 1) for position in tails)
+                      + f" (BdsDxe {bds_dxe + 1}, CloverGopDxe {gop + 1})")
+
+        # Two bands sharing an index would paint the same row, and a copy-paste
+        # INF that kept the neighbour's definition would hide a boundary instead
+        # of reporting it.  The index picks the row, so the filenames have to
+        # agree with the build defines one for one.
+        ladder = PKG / "Drivers" / "CloverLadderDxe"
+        for index in range(1, 7):
+            inf = ladder / f"CloverTail{index}.inf"
+            if not inf.is_file():
+                problems.append(f"{inf.relative_to(REPO)} is missing")
+                continue
+            found = re.search(r"-DCLOVER_TAIL_BAND=(\d+)", inf.read_text())
+            if found is None:
+                problems.append(f"{inf.name} never defines CLOVER_TAIL_BAND, so it "
+                                "paints the ladder colour instead of a band")
+            elif int(found.group(1)) != index:
+                problems.append(f"{inf.name} defines CLOVER_TAIL_BAND="
+                                f"{found.group(1)}, so it paints the wrong row")
+
         # APRIORI DXE { } only orders drivers; it does not put a file in the
         # volume.  A module named there but not in DXE.inc compiles and never
         # ships -- measured, when the first ladder build produced an FV without

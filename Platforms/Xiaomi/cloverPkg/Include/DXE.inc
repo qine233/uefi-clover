@@ -117,9 +117,15 @@
   #
   INF cloverPkg/Drivers/CloverGopDxe/CloverGopDxe.inf
 
-  # The three ladder marks.  APRIORI.inc decides when they run; an APRIORI
-  # entry alone does not put a file in the volume, which is how the first build
-  # of these produced an FV without them.
+  # The three ladder marks and the six tail bands.  APRIORI.inc decides when
+  # they run; an APRIORI entry alone does not put a file in the volume, which
+  # is how the first build of these produced an FV without them.
   INF cloverPkg/Drivers/CloverLadderDxe/CloverLadderEarly.inf
   INF cloverPkg/Drivers/CloverLadderDxe/CloverLadderLate.inf
   INF cloverPkg/Drivers/CloverLadderDxe/CloverLadderBds.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail1.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail2.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail3.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail4.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail5.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail6.inf

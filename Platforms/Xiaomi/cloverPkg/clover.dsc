@@ -136,6 +136,17 @@
   cloverPkg/Drivers/CloverLadderDxe/CloverLadderBds.inf
 
   #
+  # Six black bands over that yellow, one per boundary in the tail below
+  # BdsDxe.  Count them to see which block the dispatcher stopped in.
+  #
+  cloverPkg/Drivers/CloverLadderDxe/CloverTail1.inf
+  cloverPkg/Drivers/CloverLadderDxe/CloverTail2.inf
+  cloverPkg/Drivers/CloverLadderDxe/CloverTail3.inf
+  cloverPkg/Drivers/CloverLadderDxe/CloverTail4.inf
+  cloverPkg/Drivers/CloverLadderDxe/CloverTail5.inf
+  cloverPkg/Drivers/CloverLadderDxe/CloverTail6.inf
+
+  #
   # ACPI Tables. Silicium-ACPI has no clover board directory yet, so no tables
   # are compiled; gta4l leaves the same line commented out for that reason.
   #

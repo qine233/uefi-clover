@@ -1,0 +1,35 @@
+##
+#  clover: tail band 1 -- one black band on the yellow panel just below BdsDxe.
+#
+#  Everything above this point returned; the band says BdsDxe's own entry point
+#  did too, so the dispatcher is inside the vendor tail.  See CloverLadderDxe.c
+#  for the band geometry and the reading table.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = CloverTail1
+  FILE_GUID                      = 6E2A9C41-0D57-4B18-8F3A-1C7E5B90D264
+  MODULE_TYPE                    = UEFI_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = CloverLadderDxeEntry
+
+[Sources]
+  CloverLadderDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  BaseMemoryLib
+  DebugLib
+
+[BuildOptions]
+  *_*_*_CC_FLAGS = -DCLOVER_TAIL_BAND=1
+
+[Depex]
+  TRUE

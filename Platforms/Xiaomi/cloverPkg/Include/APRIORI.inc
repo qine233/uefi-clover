@@ -80,6 +80,12 @@ APRIORI DXE {
 
   INF MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
 
+  # Tail bands.  The yellow mark above says dispatch reached the top of the
+  # tail; these six say how far through it the dispatcher got, one black band
+  # each on the yellow screen.  They only order, so their positions are the
+  # whole message: keep each one immediately below the block it reports on.
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail1.inf
+
   INF Binaries/clover/QcomPkg/Drivers/TLMMDxe/TLMMDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/I2CDxe/I2CDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/SPMIDxe/SPMIDxe.inf
@@ -89,15 +95,21 @@ APRIORI DXE {
   INF Binaries/clover/QcomPkg/Drivers/QcomChargerDxe/QcomChargerDxeLA.inf
   INF Binaries/clover/QcomPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf
 
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail2.inf
+
   INF MdeModulePkg/Bus/Usb/UsbBusDxe/UsbBusDxe.inf
   INF MdeModulePkg/Bus/Usb/UsbKbDxe/UsbKbDxe.inf
   INF MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassStorageDxe.inf
+
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail3.inf
 
   INF Binaries/clover/QcomPkg/Drivers/UsbMsdDxe/UsbMsdDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/UsbDeviceDxe/UsbDeviceDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/UsbConfigDxe/UsbConfigDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/TsensDxe/TsensDxe.inf
+
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail4.inf
 
   # No display driver here, by design.  The vendor DisplayDxe blob and
   # DisplayReEnablerDxe are not in the volume either (DXE.inc): they reprogram
@@ -109,11 +121,15 @@ APRIORI DXE {
   INF Binaries/clover/QcomPkg/Drivers/HashDxe/HashDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/RNGDxe/RngDxe.inf
 
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail5.inf
+
   # Serial first: the UniXNU menu and the kernel console both run over
   # blsp1_uart2 at 115200 before the panel path is proven on this unit.
   INF EmbeddedPkg/SimpleTextInOutSerial/SimpleTextInOutSerial.inf
   INF MdeModulePkg/Universal/Console/ConPlatformDxe/ConPlatformDxe.inf
   INF MdeModulePkg/Universal/Console/ConSplitterDxe/ConSplitterDxe.inf
+
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail6.inf
 
   # Right before the console driver that needs it: the volume's only GOP
   # producer, over the window ABL left scanning.  Without it

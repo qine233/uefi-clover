@@ -44,11 +44,12 @@
   dispatch reached this driver. The UniXNU menu paints over green, and the Mi
   splash means ABL never entered the shim at all.
 
-  There is deliberately no third colour for BDS. BdsDxe sits at APRIORI line 68
-  and installs its arch protocol in its entry point, long before line 109
-  reaches this driver; CoreRegisterProtocolNotify does not report interfaces
-  that already exist, so a notification here would fire only if something
-  reinstalled the protocol, and would say nothing in the normal case.
+  There is deliberately no third colour for BDS. BdsDxe sits above this driver
+  in APRIORI.inc and installs its arch protocol in its entry point, which runs
+  before the dispatcher reaches this driver; CoreRegisterProtocolNotify does not
+  report interfaces that already exist, so a notification here would fire only
+  if something reinstalled the protocol, and would say nothing in the normal
+  case.
 
   Copyright (c) 2026, UniXNU contributors. All rights reserved.
   SPDX-License-Identifier: BSD-2-Clause-Patent

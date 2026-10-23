@@ -7,9 +7,9 @@
 #    * UFSDxe is not started. The Mi Pad 4 8" LTE stores everything on eMMC 5.1
 #      (sdhc_1 @ 0x0C0C4000, CQE + HS400ES); its stock firmware has no UFS
 #      stack, so requiring that blob would only break the build.
-#    * The display is this unit's own DisplayDxe blob plus DisplayReEnablerDxe,
-#      because clover.dsc sets USE_CUSTOM_DISPLAY_DRIVER = 1; the SimpleFbDxe
-#      branch below is what a 0 selects.
+#    * The display is not driven by this volume at all: the vendor DisplayDxe
+#      blob and DisplayReEnablerDxe are left out, and CloverGopDxe publishes a
+#      GraphicsOutput over the window ABL is already scanning.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
@@ -86,12 +86,10 @@ APRIORI DXE {
   INF Binaries/clover/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/TsensDxe/TsensDxe.inf
 
-!if $(USE_CUSTOM_DISPLAY_DRIVER) == 1
-  INF Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.inf
-  INF QcomPkg/Drivers/DisplayReEnablerDxe/DisplayReEnablerDxe.inf
-!else
-  INF SiliciumPkg/Drivers/SimpleFbDxe/SimpleFbDxe.inf
-!endif
+  # No display driver here, by design.  The vendor DisplayDxe blob and
+  # DisplayReEnablerDxe are not in the volume either (DXE.inc): they reprogram
+  # the MDSS pipeline and the panel that ABL handed over, which is the opposite
+  # of what a framebuffer owner wants.
 
   INF Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
   INF Binaries/clover/QcomPkg/Drivers/LimitsDxe/LimitsDxe.inf
@@ -104,10 +102,10 @@ APRIORI DXE {
   INF MdeModulePkg/Universal/Console/ConPlatformDxe/ConPlatformDxe.inf
   INF MdeModulePkg/Universal/Console/ConSplitterDxe/ConSplitterDxe.inf
 
-  # Right before the console driver that needs it: a GOP over the panel buffer.
-  # The vendor DisplayDxe blob never produced one that BDS or a console could
-  # use, and SimpleFbDxe is compiled out, so GraphicsConsoleDxe's depex has been
-  # unsatisfiable on this board and every console has been the serial port.
+  # Right before the console driver that needs it: the volume's only GOP
+  # producer, over the window ABL left scanning.  Without it
+  # GraphicsConsoleDxe's depex is unsatisfiable and the only console is the
+  # serial port on blsp1_uart2, which this unit has no cable for.
   INF cloverPkg/Drivers/CloverGopDxe/CloverGopDxe.inf
   INF MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsoleDxe.inf
 }

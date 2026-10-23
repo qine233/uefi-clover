@@ -219,16 +219,20 @@ R Binaries/clover/QcomPkg/Drivers/SdccDxe/SdccDxe.efi
 R Binaries/clover/QcomPkg/Drivers/SdccDxe/SdccDxe.depex
 
 # --- display -----------------------------------------------------------------
-# clover.dsc sets USE_CUSTOM_DISPLAY_DRIVER=0, exactly like gta4l, so the
-# DisplayDxe branch in APRIORI.inc and DXE.inc is compiled out and SiliciumPkg's
-# SimpleFbDxe takes over the splash framebuffer that the boot ROM already
-# configured (1200x1920, 32 bpp, at 0x9D400000 -- "Display Reserved" in this
-# unit's uefiplat.cfg; clover-overlay.dtsi's 0x9D500000 is the Android kernel's
-# own reservation and the firmware beats it).  The vendor driver is therefore
-# optional today, and it becomes required the moment the panel needs something
-# SimpleFbDxe cannot do, which is the expected path once the ADT's display
-# properties are fed to XNU.  Marked O so the checker reports it as "nice to
-# have" rather than blocking the first build.
+# Nothing in the volume touches the display: ABL brings MDSS, the nt51021 panel
+# and the pm660l backlight up and leaves them scanning the 1200x1920 window at
+# 0x9D400000 ("Display Reserved" in this unit's uefiplat.cfg; clover-overlay.dtsi's
+# 0x9D500000 is the Android kernel's own reservation and the firmware beats it).
+# CloverGopDxe publishes the GraphicsOutput over that window and is the only
+# code that writes to it.
+#
+# The vendor DisplayDxe blob is not linked.  It was, under the
+# USE_CUSTOM_DISPLAY_DRIVER branch lavender uses, and the bring-up measured the
+# conflict: bands this firmware painted appeared and then vanished, with the
+# backlight left on -- the blob had taken MDSS over.  Extracting it is still
+# harmless (it documents where the blob comes from), so the three lines are O
+# rather than R: a build that does not read them is a build that has not silently
+# grown a second panel owner.
 O Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.inf
 O Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.efi
 O Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.depex

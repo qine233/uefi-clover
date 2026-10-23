@@ -77,20 +77,31 @@ boot 镜像是 v0：本机的 `boot` 和 `recovery` 两个分区 header version 
 
 ## 显示
 
-`clover.toml` 设 `USE_CUSTOM_DISPLAY_DRIVER = 1`，这会编掉 `SimpleFbDxe`，
-换成机器自带的 `DisplayDxe` blob。那个 blob 里有 GOP GUID，但在这次构建里
-从未发布过可用接口，于是 `GraphicsConsoleDxe` 的 depex 无法满足——能用的
-控制台只剩 `SimpleTextInOutSerial`。`Drivers/CloverGopDxe` 补上这个缺口：
-在 ABL 正在扫描的窗口 `0x9D400000` 上发布单模式 GOP（1200×1920，
-`PixelBlueGreenRedReserved8BitPerColor`）。它在 `APRIORI.inc` 里紧挨
-`GraphicsConsoleDxe` 之前，而 APRIORI 条目启动时不评估 depex，所以它不依赖厂商 blob。
+这个固件卷不初始化显示，只接管 ABL 留下的那一套。ABL 启动时已经把 MDSS、
+nt51021 面板和 pm660l 背光点亮，并且正在扫描 "Display Reserved" 窗口
+（`0x9D400000`，1200×1920，32 bpp）；固件卷里没有任何模块去改这些硬件。
+
+`Drivers/CloverGopDxe` 是卷里唯一的 GOP 生产者：在这段窗口上发布单模式
+`GraphicsOutput`（`PixelBlueGreenRedReserved8BitPerColor`），`Blt` 只做
+写显存这一件事。它排在 `APRIORI.inc` 里 `GraphicsConsoleDxe` 之前，而
+APRIORI 条目启动时不评估 depex，所以它不依赖任何厂商 blob。
+
+厂商的 `DisplayDxe` 和 `DisplayReEnablerDxe` 曾经被链接进来（即
+`USE_CUSTOM_DISPLAY_DRIVER = 1`，lavender 在同款芯片上的选择），但在这个
+单元上测出的结果相反：早期刻度带先出现、随后消失，背光却一直亮着——blob
+接管了 MDSS，不再扫描我们写的那段窗口。同一块面板不能有两个主人，而这个
+只负责写的更好预测。两者现在都不进卷，`proprietary-files.txt` 里保留
+`O` 记录，`check-clover-uefi.py` 也会拦住把它们加回来的改动。
+
+没有 GOP 时 `GraphicsConsoleDxe` 起不来，UniXNU 会退回串口文本控制台——
+在平板上等于看不见，所以卷里必须有 `CloverGopDxe`，这条同样是检查项。
 
 ## ClockDxe 为什么要打补丁
 
 本机固件卷里的 `ClockDxe` 在 SDM660 上会卡死在两处没有超时的硬件握手里：
 一次 RCGR 更新（`MMCC + 0x2040`，`mdp_clk_src`）和一次 GDSC PWR_ON 等待。
-DXE 调度是串行的，卡在 ClockDxe 就不再往下走，`DisplayDxe`、BDS 和
-`CloverGopDxe` 都轮不到——屏幕就停在 ABL 画的 Mi 标志上。
+DXE 调度是串行的，卡在 ClockDxe 就不再往下走，BDS 和 `CloverGopDxe`
+都轮不到——屏幕就停在 ABL 画的 Mi 标志上。
 
 上游对同一个问题已经有定论：Project-Silicium/Device-Binaries 里
 `ClockDxe.patched.efi` 与 stock `ClockDxe.efi` 只差 24 个字节，
@@ -227,6 +238,11 @@ fastboot flash boot ~/UniXNU-clover/facts/81ffcaaa-20261022-210928/img/unixnu-bo
 | DarwinBoot 进入 XNU | 未开始 |
 | 存储与 root 设备 | 未开始 |
 | 用户态 | 未开始 |
+
+从 `v0.3.3` 起，卷里不再链接厂商 `DisplayDxe` / `DisplayReEnablerDxe`。它们会
+重编程 ABL 已经点亮并正在扫描的 MDSS 和面板，实测表现是刻度带先出现后消失、
+背光常亮——两个面板主人互相打断。现在显示只有一个主人：ABL 留下的窗口和
+只负责写的 `CloverGopDxe`。
 
 `v0.3.0` 之前的固件带过一套调试仪器——checkpoint 刻度条、异常报告和定时器
 PC 采样——用来找出 DXE 调度在这块板上停在哪里。那部分工作保留在 `v0.2.42`

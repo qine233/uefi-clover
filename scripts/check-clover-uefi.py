@@ -320,6 +320,27 @@ def check_group_fv(problems: list, warnings: list, args_unixnu=None):
                             "(fine, but nobody documented why)")
 
     referenced = {e[0] for e in included} | {e[0] for e in guarded_out}
+    #
+    # The panel belongs to ABL.  It hands over a live MDSS pipeline, the nt51021
+    # panel and the pm660l backlight, scanning the "Display Reserved" window, and
+    # the two vendor display drivers would reprogram exactly that: on this unit
+    # the checkpoint bands appeared and then went away while the backlight stayed
+    # on, which is one panel owner fighting the other.  CloverGopDxe only writes
+    # the window, so it is the one producer allowed here.  Both halves of the rule
+    # are load-bearing: without a GOP, GraphicsConsoleDxe never starts and UniXNU
+    # falls back to the serial console, which is invisible on the tablet.
+    #
+    for driver in ("QcomPkg/Drivers/DisplayDxe/DisplayDxe.inf",
+                   "QcomPkg/Drivers/DisplayReEnablerDxe/DisplayReEnablerDxe.inf"):
+        if any(path.endswith(driver) for path in referenced):
+            problems.append(f"{driver} is in the firmware volume; the panel, its MDSS "
+                            "pipeline and its backlight are ABL's and CloverGopDxe is "
+                            "the only writer (see the display paragraph in clover.dsc)")
+    if not any(path.endswith("Drivers/CloverGopDxe/CloverGopDxe.inf")
+               for path in referenced):
+        problems.append("no CloverGopDxe in the firmware volume and no other module "
+                        "publishes a GraphicsOutput, so GraphicsConsoleDxe cannot "
+                        "start and the tablet has no visible console")
     for entry in list(referenced):
         if entry.endswith(".inf"):
             stem = entry[:-4]

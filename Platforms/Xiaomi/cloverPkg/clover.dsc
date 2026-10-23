@@ -16,16 +16,17 @@
 #                                                   its own splash, and loses)
 #    UEFI FD              0x9FC00000 + 0x00300000 (Resources/Configs/clover.toml)
 #
-#  USE_CUSTOM_DISPLAY_DRIVER is 1, the choice lavender makes on this same silicon:
-#  this unit's own DisplayDxe blob was extracted from its xbl, so the firmware
-#  brings up MDSS, the nt51021 panel and the pm660l WLED backlight itself.  The
-#  inherited-framebuffer route (= 0, SiliciumPkg SimpleFbDxe wrapping the ABL
-#  splash) was tried first and cannot be judged from outside: the generic-geometry
-#  image left the Mi splash frozen and the stock-geometry one left a black screen,
-#  with no USB node either time -- "running, wrong framebuffer" and "not running"
-#  look identical.  Driving the panel from our own code makes the screen a real
-#  liveness signal.  UniXNU still takes the splash region over as its ADT
-#  display-base.
+#  The display is inherited, not initialised: ABL leaves MDSS scanning the
+#  "Display Reserved" window with the nt51021 panel and the pm660l backlight on,
+#  and nothing in this volume reprograms either.  The vendor DisplayDxe blob and
+#  DisplayReEnablerDxe used to be linked in (a USE_CUSTOM_DISPLAY_DRIVER branch,
+#  the choice lavender makes) and measured the opposite of useful on this unit:
+#  the checkpoint bands of the earlier bring-up showed, then blanked, while the
+#  backlight stayed on -- the blob had taken MDSS over and stopped scanning the
+#  window our code writes.  Two independent producers of the same panel cannot
+#  both be right, and the one that only writes is the one whose output can be
+#  predicted.  CloverGopDxe publishes the GraphicsOutput over the inherited
+#  window; UniXNU takes the same window as its ADT display-base.
 #
 #  Copyright (c) 2011 - 2022, ARM Limited. All rights reserved.
 #  Copyright (c) 2014, Linaro Limited. All rights reserved.
@@ -51,6 +52,13 @@
   BUILD_TARGETS                  = RELEASE|DEBUG
   SKUID_IDENTIFIER               = DEFAULT
   FLASH_DEFINITION               = cloverPkg/clover.fdf
+
+  #
+  # SiliciumPkg.dsc.inc reads this one only as "!if ... == 0, build
+  # SimpleFbDxe".  It stays 1 so that nothing but CloverGopDxe produces a
+  # GraphicsOutput: SimpleFbDxe would publish a second GOP over the same
+  # window.  No vendor display driver is linked by any branch any more.
+  #
   USE_CUSTOM_DISPLAY_DRIVER      = 1
 
 !include StarlordPkg/StarlordPkg.dsc.inc

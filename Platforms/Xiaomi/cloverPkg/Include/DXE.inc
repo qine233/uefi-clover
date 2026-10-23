@@ -65,12 +65,10 @@
 
   INF Binaries/clover/QcomPkg/Drivers/TLMMDxe/TLMMDxe.inf
 
-!if $(USE_CUSTOM_DISPLAY_DRIVER) == 1
-  INF Binaries/clover/QcomPkg/Drivers/DisplayDxe/DisplayDxe.inf
-  INF QcomPkg/Drivers/DisplayReEnablerDxe/DisplayReEnablerDxe.inf
-!else
-  INF SiliciumPkg/Drivers/SimpleFbDxe/SimpleFbDxe.inf
-!endif
+  # No display driver: neither the vendor DisplayDxe blob nor SimpleFbDxe.
+  # The panel, its MDSS pipeline and its backlight are left exactly as ABL set
+  # them up, and CloverGopDxe below is the only code that touches the window.
+  # See the display paragraph in clover.dsc for what linking the blob measured.
 
   INF Binaries/clover/QcomPkg/Drivers/PlatformInfoDxe/PlatformInfoDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/ButtonsDxe/ButtonsDxe.inf
@@ -113,8 +111,8 @@
 !endif
 
   #
-  # The GOP over the panel buffer DisplayDxe paints but does not publish
-  # (Drivers/CloverGopDxe).  APRIORI.inc dispatches it right before
-  # GraphicsConsoleDxe, whose depex is otherwise never satisfied on this board.
+  # The GOP over the inherited panel window (Drivers/CloverGopDxe).  APRIORI.inc
+  # dispatches it right before GraphicsConsoleDxe, whose depex is otherwise
+  # never satisfied on this board.
   #
   INF cloverPkg/Drivers/CloverGopDxe/CloverGopDxe.inf

@@ -1,31 +1,36 @@
 /** @file
-  clover: a Graphics Output Protocol over the framebuffer the display blob owns.
+  clover: a Graphics Output Protocol over the framebuffer ABL is already
+  scanning out.
 
-  This unit's DisplayDxe is a vendor blob. It brings MDSS, the nt51021 panel and
-  the pm660l backlight up and paints into the "Display Reserved" window at
-  0x9D400000, which is the buffer ABL hands over.  It is also the only candidate
-  producer of EFI_GRAPHICS_OUTPUT_PROTOCOL in this volume: SimpleFbDxe, the stock
-  driver that would publish one over the inherited framebuffer, is compiled out
-  because clover picks the vendor display driver (USE_CUSTOM_DISPLAY_DRIVER = 1).
-  The vendor blob does reference the protocol GUID, but no GOP is there when it
-  matters: BDS's boot graphic (BootLogo.bmp / NoBootOS.bmp) is drawn only through
-  a GOP, and none appears.
+  This unit's screen comes up before our code runs: ABL starts MDSS, the
+  nt51021 panel and the pm660l backlight, and paints the Mi splash into the
+  "Display Reserved" window at 0x9D400000.  Nothing in this volume reprograms
+  any of it.  The vendor DisplayDxe blob and DisplayReEnablerDxe used to be
+  linked in (the USE_CUSTOM_DISPLAY_DRIVER = 1 branch, the choice lavender
+  makes), and the earlier bring-up measured what that costs: the checkpoint
+  bands this firmware painted appeared and then went away, and the panel ended
+  up blank while the backlight stayed on.  The blob had taken MDSS over and
+  stopped scanning the window our writes land in.  Two owners of one panel
+  cannot both be right, and the one that only writes is the one whose output
+  can be predicted, so the blob is gone.
 
-  That one missing protocol is why no menu has ever reached this panel. A
-  consumer has nothing to draw with: GraphicsConsoleDxe's depex is never
-  satisfied, so the only console is SimpleTextInOutSerial over blsp1_uart2 (no
-  cable on this unit), and UniXNU's UI init falls from Graphics to Text -- the
-  serial console -- and draws an 80x25 menu nobody can see. Printing the menu
-  into a UART is indistinguishable from not running.
+  What is left is that no other driver in this volume produces
+  EFI_GRAPHICS_OUTPUT_PROTOCOL: SimpleFbDxe, the stock driver that would
+  publish one over an inherited framebuffer, is not built either, because its
+  own job is exactly what this file does with constants read off the unit
+  instead of a memory-map lookup.  Without a GOP, GraphicsConsoleDxe never
+  starts and the only console is SimpleTextInOutSerial over blsp1_uart2 (no
+  cable on this unit), and UniXNU's UI falls from Graphics to Text -- the
+  serial console -- and draws an 80x25 menu nobody can see.
 
-  So publish the protocol here instead of waiting for the blob to. The buffer,
-  geometry and pixel order are not guesses: clover.dsc already declares
-  1200x1920 (PcdFrameBufferWidth/Height) from the panel's own device tree, the
-  splash window is the one uefiplat.cfg reserves, and the memory order was read
-  off the unit's own firmware -- 0xFF0000FF displays blue, so byte 0 is blue and
-  the format is PixelBlueGreenRedReserved8BitPerColor. One mode, no mode changes:
-  the panel is not switchable, and a consumer that asks for another mode is
-  asking for something this board cannot do.
+  So publish the protocol here.  The buffer, geometry and pixel order are not
+  guesses: clover.dsc declares 1200x1920 (PcdFrameBufferWidth/Height) from the
+  panel's own device tree, the splash window is the one uefiplat.cfg reserves,
+  and the memory order was read off the unit's own firmware -- 0xFF0000FF
+  displays blue, so byte 0 is blue and the format is
+  PixelBlueGreenRedReserved8BitPerColor.  One mode, no mode changes: the panel
+  is not switchable, and a consumer that asks for another mode is asking for
+  something this board cannot do.
 
   Blt is the whole protocol for a framebuffer like this. Implemented: video
   fill, buffer to video, video to buffer and video to video. UniXNU only uses

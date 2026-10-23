@@ -36,6 +36,13 @@
 #  write the compare again on every sample.  See mTickBits for what those bands mean, and
 #  for the one thing the round gives up: event timeouts after line 32.
 #
+#  Round 24 takes one more thing, and it is a runtime service rather than a protocol:  the
+#  ResetSystem pointer in the system table this driver is handed.  Round 22 got the boot
+#  all the way to BDS, and BDS's no-operating-system exit draws its own picture, waits ten
+#  seconds and then asks for a shutdown -- which is the reason a ladder that works reads as
+#  a screen that went dark.  Holding that call here instead of passing it on is what makes
+#  the picture stay up, and the band's colour keeps the requested reset type on the way.
+#
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
 

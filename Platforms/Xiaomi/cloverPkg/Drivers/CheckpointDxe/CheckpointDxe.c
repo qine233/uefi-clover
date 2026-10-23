@@ -323,6 +323,13 @@ STATIC CONST struct {
 #define CLOVER_MARK_UNMATCHED  2
 #define CLOVER_MARK_HANDLER    3
 
+// Round 24's fifth mark, and the only band that sits above the first protocol slot rather
+// than below the last one:  it is one pitch over the table, two pitches under the magenta
+// anchor, which is where the ladder has a free step and where a photograph finds it by the
+// same geometry it uses to find the anchors.
+#define CLOVER_MARK_RESET      4
+#define CLOVER_RESET_BAND      0x00100000
+
 STATIC CONST struct {
   UINT64   Offset;
   UINT32   Argb;
@@ -340,7 +347,20 @@ STATIC CONST struct {
   // EFI_ALREADY_STARTED rather than chaining, in which case a fault would have gone to
   // the default handler, out to a serial port nobody can read, and a screen with the
   // fault rows dark says nothing about whether one happened.
-  { 0x007C0000, CLOVER_COLOR_WHITE, "the exception handler is registered"    }
+  { 0x007C0000, CLOVER_COLOR_WHITE, "the exception handler is registered"    },
+
+  // And the fifth is not a mark about an instrument at all.  It is the answer to the
+  // question round 22 left:  that build escaped the clock poll, travelled further than any
+  // round before it, and then went dark and powered itself off -- which is what
+  // Silicium's PlatformBootManagerUnableToBoot does, in this order, in these words
+  // (Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c:202-224):  draw the
+  // no-boot graphic, which takes the panel, Stall (10000000), then ResetSystem
+  // (EfiResetShutdown), which is a power-off this tablet only comes back from by a long
+  // press.  So a boot that finishes now destroys its own reading on the way out, and the
+  // photograph has to be taken inside ten seconds.  This band is that call, caught:  its
+  // colour is the EFI_RESET_TYPE the caller asked for, and the hook that paints it never
+  // returns, so the window is as long as the reader wants.
+  { 0x00100000, CLOVER_COLOR_YELLOW, "a reset was requested (yellow = shutdown)" }
 };
 
 
@@ -1272,6 +1292,11 @@ STATIC UINT64                              mTickTicks;
 STATIC UINTN                               mTickParkKind;     // which loop mTickParkCount is
 STATIC UINTN                               mTickParkCount;    // ticks taken inside it
 STATIC UINTN                               mHealCursor;       // which bar this tick inspects
+
+// Round 24: the reset hook's hold.  Volatile, because the only thing it does is keep the
+// loop that stores to it from being optimised into a boot that falls through to whatever
+// comes after a call that never returns.
+STATIC volatile UINTN                      mResetHookHeld;
 STATIC EFI_EVENT                           mTickEvent;
 STATIC VOID                                *mTickRegistration;
 
@@ -1782,6 +1807,80 @@ TimerAppeared (
   PaintTick (CLOVER_TICK_OURS);
 }
 
+/**
+  Round 24: the platform's way out, caught on its way past this driver.
+
+  Installed over `SystemTable->RuntimeServices->ResetSystem` at entry, which is the
+  pointer every caller of `gRT->ResetSystem` dereferences -- DxeCore published
+  `CoreResetSystem` into that structure and reaches the arch protocol through it, so
+  replacing the member is the one place that sees a shutdown from BDS, a reset from a
+  vendor blob and a `ResetUtilityLib` call alike, without naming any of them.
+
+  What it does is paint one band and stop.  The colour is the requested type, because the
+  type is the part worth keeping:  yellow means somebody asked for a shutdown, which is
+  what BDS's no-OS exit asks for, while red or cyan would mean a cold or warm reset and
+  point at a different caller entirely.
+
+  What it deliberately does not do is call the real one.  Every round so far has read a
+  screen that was alive for a couple of seconds; this is the round that tries to make it
+  stay.  The loop below is a thread, not a masked interrupt, so the tick still fires at
+  its own level and the round-23 refresher keeps sweeping -- which is what turns the
+  reading into a fork with no third option:  if the ladder comes back and holds, the dark
+  screen was one pass of a blit and the refresher out-painted it, and everything the boot
+  reached is on the panel for as long as anyone wants to photograph it.  If the screen
+  stays dark with the hook lit, then the panel no longer scans 0x9D400000 at all, and the
+  instrument has to move to wherever the display driver pointed the scan-out.
+
+  @param  ResetType    What the caller wanted done; reported as the band's colour.
+  @param  ResetStatus  Ignored:  no caller of this on a tablet reaches an OS.
+  @param  DataSize     Ignored.
+  @param  ResetData    Ignored.
+
+  @return  Nothing.  VOID is the signature the platform's own typedef asks for, and this
+           instance never gets to the return the real one would fall through to.
+
+**/
+STATIC
+VOID
+EFIAPI
+CloverResetCaught (
+  IN EFI_RESET_TYPE  ResetType,
+  IN EFI_STATUS      ResetStatus,
+  IN UINTN           DataSize,
+  IN VOID            *ResetData OPTIONAL
+  )
+{
+  UINT32  Argb;
+
+  Argb = CLOVER_COLOR_YELLOW;
+  switch (ResetType) {
+    case EfiResetCold:
+      Argb = CLOVER_COLOR_RED;
+      break;
+
+    case EfiResetWarm:
+      Argb = CLOVER_COLOR_CYAN;
+      break;
+
+    case EfiResetShutdown:
+      Argb = CLOVER_COLOR_YELLOW;
+      break;
+
+    default:
+      Argb = CLOVER_COLOR_WHITE;
+      break;
+  }
+
+  CloverCheckpointBar (CLOVER_RESET_BAND, Argb);
+
+  // A volatile store is the loop:  BaseLib is not linked into this module, so
+  // CpuDeadLoop would be a link error, and a plain `for (;;)` is something a compiler is
+  // entitled to remove.
+  for ( ; ; ) {
+    mResetHookHeld++;
+  }
+}
+
 EFI_STATUS
 EFIAPI
 CheckpointDxeEntry (
@@ -1817,6 +1916,16 @@ CheckpointDxeEntry (
     CloverCheckpointBar (mMarks[Index].Offset, CLOVER_COLOR_BLACK);
     mMarksShown[Index] = 0;
   }
+
+  // Round 24, and it goes in after the sweep rather than before it:  the band this hook
+  // paints is one of the rows the sweep just cleared to black, and a hook installed first
+  // could fire between the two and have its own reading erased by the pass below it.
+  //
+  // The table is reached through the argument rather than through gRT because this module
+  // does not link UefiRuntimeServicesTableLib, and it does not link it because nothing
+  // else in it needs a runtime service.  SystemTable->RuntimeServices is the same
+  // structure gRT points at, so this writes the pointer every caller dereferences.
+  SystemTable->RuntimeServices->ResetSystem = CloverResetCaught;
 
   for (Index = 0; Index < ARRAY_SIZE (mSlots); Index++) {
     if (EFI_ERROR (gBS->CreateEvent (

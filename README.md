@@ -398,14 +398,43 @@ indexed by the bar's position in the ladder's own 256 KiB pitch, and the tick ha
 bar of every millisecond comparing the panel against that record and putting the colour back
 where it disagrees.  One bar per tick rather than a sweep, because restoring the whole ladder is
 3.75 MiB of writes inside an interrupt handler, and thirty ticks is still far faster than a
-photograph.  The two PEI anchors are painted over in the same colours at DXE entry so they enter
-the record too -- the record is per image, and a band nobody owns is a band nobody defends.  No
+photograph.  The two PEI anchors enter the record by a *claim* rather than a repaint -- the
+record is per image, so `CheckpointDxe` restates green and yellow at its entry without touching
+those pixels, because a stage that paints over another stage's slot destroys the reading the
+first one carried, which is exactly what `check-clover-uefi.py` refuses a build over.  No
 row changes meaning, so round 23 decodes exactly like round 22: red at `+0x340000` is still
 `ClockDxe` finishing, and the index meter still names whatever the dispatch loop last started.
 What the round decides is the next fork, and it is a real fork: if the ladder is readable in
 this photograph, the wipe was a clear and the boot past the clock is now visible; if the screen
 is still dark with the refresher running, the panel is no longer scanning `0x9D400000`, and the
 target moves to wherever the display driver pointed it.
+
+Round 23 came back with the same screen as round 22 -- bands, then a lit backlight over nothing,
+then a power-off that only a ten-second hold answers -- and the reason turned out to be in the
+tree rather than in the panel.  Round 22 did not get stuck again.  It got *to the end*: BDS found
+no operating system, which on this port is the expected state of the world, and
+`Silicon/Silicium/SiliciumPkg/Library/BootManagerLib/BootManager.c:202-224` answers that with
+`DisplayBootGraphic (BG_NO_BOOT_OS)`, then `gBS->Stall (10000000)`, then
+`gRT->ResetSystem (EfiResetShutdown, ...)`.  Three statements, and the device report has three
+clauses in the same order.  The ladder is not being erased by something mysterious downstream:
+the boot is drawing over it, waiting ten seconds, and switching the tablet off, and a refresher
+that only defends memory cannot win an argument with a panel that has been told to show
+something else.  So round 24 stops the argument at its source.  `CheckpointDxe` overwrites
+`SystemTable->RuntimeServices->ResetSystem` at entry -- the same structure `gRT` points at, and
+the one every caller dereferences, including `CoreResetSystem` on its way to the arch protocol --
+and its replacement paints one new band and never returns.  The band is the ladder's only free
+step, `+0x100000`, one pitch above the first protocol slot and two below the magenta anchor, and
+its colour is the `EFI_RESET_TYPE` the caller asked for: yellow shutdown, red cold, cyan warm,
+white platform-specific, so the row is four-valued where everything else on the panel is two, and
+`read-clover-photo.py` says which.  Hanging there rather than continuing costs nothing the boot
+still needed -- there is no OS to hand off to -- and it buys the one thing twenty-three rounds
+have not had: a picture that stays.  Two answers come out of the same photograph.  If the ladder
+is up and holding, the dark screen was one pass of a blit, the refresher out-painted it, and
+everything above is the finished boot reading at leisure.  If the reset band is the only thing
+lit, the panel really has stopped scanning `0x9D400000` and the instrument has to move to the
+buffer the display driver chose.  And if the tablet still powers itself off with this build, then
+the shutdown never came through runtime services at all, which points the next round at the
+hardware watchdog instead.
 
 ## Status
 

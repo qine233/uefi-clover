@@ -69,6 +69,16 @@ NAME_BY_COLOR = {
     "CLOVER_COLOR_BLACK": "black",
 }
 LIT = ("yellow", "cyan", "red", "white")
+# Round 24's reset band answers with its colour rather than with being lit: the hook that
+# paints it takes the colour from the EFI_RESET_TYPE the caller passed, so a red band is
+# not a yellow band read wrong -- it is a cold reset, which names a different caller
+# entirely.  Everything else on the ladder is one bit; this row is four.
+RESET_TYPE_BY_COLOR = {
+    "yellow": "EfiResetShutdown",
+    "red":    "EfiResetCold",
+    "cyan":   "EfiResetWarm",
+    "white":  "EfiResetPlatformSpecific",
+}
 # The stage bands are not in the table; they are what the geometry is anchored to, and
 # the only two of them that can be identified before the fit is known.
 STAGES = {-4: "green", -2: "magenta"}
@@ -566,6 +576,8 @@ def build_ladder(driver):
             ladder[index] = {"kind": kind, "off": entry["off"],
                              "want": forced or entry["want"], "name": entry["name"],
                              "bit": entry.get("bit")}
+            if kind == "mark" and entry["name"].startswith("a reset was requested"):
+                ladder[index]["reset"] = RESET_TYPE_BY_COLOR
     for entry in faults(Path(driver)):
         index = (entry["off"] - base) // pitch
         band = ladder.get(index)
@@ -862,6 +874,8 @@ def report(best, ladder, a):
         artefact."""
         if not got:
             return "dark"
+        if s.get("reset"):
+            return "LIT: %s" % s["reset"].get(got, "a type no caller passes")
         if got == s["want"]:
             return "LIT"
         if s["want"] == "white" and got == "cyan":
@@ -931,6 +945,38 @@ def report(best, ladder, a):
                   (index, named.get(index, "(run scripts/fv-order.py and pass --modules)")))
 
     report_kind("mark", "what the meter says about itself:")
+
+    # Round 24's fork, said in one place rather than left to be inferred from a row of the
+    # table above, because it decides the next build instead of describing this one.  The
+    # hook that paints this band never returns, so a lit row does not just mean "BDS gave
+    # up":  it means the tablet is sitting in that loop right now, with the refresher still
+    # sweeping, and whatever is on the panel is what the panel is going to keep showing.
+    reset_row = next((i for i in sorted(ladder) if ladder[i].get("reset")), None)
+    if reset_row is not None:
+        _y, seen = sample(reset_row)
+        got = lit.get(reset_row) or (seen if seen in LIT else None)
+        held = sum(1 for i in ladder
+                   if ladder[i]["kind"] == "slot" and not
+                   (ladder[i].get("fault") or ladder[i].get("tick")) and lit.get(i))
+        if got:
+            print("\nRESET REQUESTED: %s.  This build holds the boot at that call instead "
+                  "of letting it cut the power, so the picture is stable and there is no "
+                  "rush to photograph it." % ladder[reset_row]["reset"].get(got, got))
+            if held:
+                print("%d protocol slot(s) are lit under it, which means the panel still "
+                      "scans the window the ladder is drawn in and the whole reading above "
+                      "is the boot as far as it went -- read it, do not re-run it." % held)
+            else:
+                print("...and nothing else on the panel came back while the refresher kept "
+                      "sweeping.  That is the second branch: the display is no longer "
+                      "scanning %s, so the next round has to draw where the display driver "
+                      "pointed the scan-out rather than where BootShim filled." % "0x9D400000")
+        else:
+            print("\nthe reset band is dark, so no caller went through gRT->ResetSystem "
+                  "before this frame was taken.  If the tablet still powered itself off, "
+                  "the shutdown came from somewhere this hook cannot see -- a hardware "
+                  "watchdog barking, or a driver that reaches the PMIC without asking the "
+                  "runtime services -- and that is what the next round goes after.")
 
     report_rows = [(i, ladder[i]) for i in sorted(ladder)
                    if ladder[i].get("fault") or ladder[i].get("tick")]

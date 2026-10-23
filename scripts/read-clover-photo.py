@@ -705,6 +705,14 @@ def report(best, ladder, a):
                 continue
             _y, seen = sample(i)
             got = lit.get(i) or (seen if seen in LIT else None)
+            # A slot row that a report layer borrowed is no longer the slot's own colour:
+            # the driver suppresses that paint on purpose (SlotIsLent) so the report can be
+            # read there.  Calling the yellow of a tick bit "WRONG", or a dark borrowed row
+            # "the protocol never appeared", would both be inventions -- the sections below
+            # say what the band is actually holding.
+            if kind == "slot" and (s.get("fault") or s.get("tick")):
+                print("%#011x %-7s %-12s %-9s %s" % (s["off"], s["want"], "LENT", seen, s["name"]))
+                continue
             state = state_of(s, got)
             if kind == "slot" and not got:
                 dark.append((i, s["off"], s["name"]))
@@ -714,11 +722,12 @@ def report(best, ladder, a):
     dark = report_kind("slot", "protocol slots:")
     if dark:
         print("\nfirst dark slot: index %d at %#011x  %s" % dark[0])
-        lit_slots = [i for i in lit if i in ladder and ladder[i]["kind"] == "slot"]
+        lit_slots = [i for i in lit if i in ladder and ladder[i]["kind"] == "slot"
+                     and not (ladder[i].get("fault") or ladder[i].get("tick"))]
         if lit_slots:
             print("deepest lit slot: index %d" % max(lit_slots))
     else:
-        print("\nevery slot lit")
+        print("\nevery un-borrowed slot lit")
 
     if any(s["kind"] == "bit" for s in ladder.values()):
         # Decide each bit at the row the fit predicts for its offset rather than from the
@@ -750,8 +759,10 @@ def report(best, ladder, a):
 
     report_kind("mark", "what the meter says about itself:")
 
+    report_rows = [(i, ladder[i]) for i in sorted(ladder)
+                   if ladder[i].get("fault") or ladder[i].get("tick")]
     fault_rows = [(i, ladder[i]) for i in sorted(ladder) if ladder[i].get("fault")]
-    if fault_rows:
+    if report_rows:
         # The fourth mark is the switch that makes these rows mean anything: without a
         # registered handler a fault goes to the default one, out to a serial port nobody
         # can read, and the seven borrowed bands stay exactly as dark as a boot that never
@@ -766,7 +777,7 @@ def report(best, ladder, a):
         # white where the fault layer's translation-fault row wants cyan.  A frame from
         # before round 18 has no tick table at all and lands in the fault branch, which is
         # what an old photograph means.
-        tick_rows = [(i, s) for i, s in fault_rows if s.get("tick")]
+        tick_rows = [(i, s) for i, s in report_rows if s.get("tick")]
         mode_row = next(((i, s) for i, s in tick_rows
                          if any(t["want"] == "white" for t in s["tick"])), None)
         mode = None

@@ -38,7 +38,9 @@ with the firmware, and the ladder position of every band is derived from its off
 than from the order the tables appear in.
 
 Usage:  scripts/read-clover-photo.py /path/to/photo.jpeg [--width 600] [--rotate 90]
-        [--center 0.50] [--span 0.12] [--modules fv-order.txt] [--debug]
+        [--center 0.50] [--span 0.12] [--modules fv-order.txt] [--register-map map.txt]
+        [--dt Resources/DTBs/clover.dts] [--driver path/to/that/round/CheckpointDxe.c]
+        [--debug]
 """
 
 import argparse
@@ -205,7 +207,7 @@ def modules(path):
     return out
 
 
-def register_window(path, addr):
+def register_window(path, addr, span=1 << 16):
     """Which mapped device region a polled register address lands in.
 
     The address is the whole point of round 20.  The module is waiting for an
@@ -214,8 +216,11 @@ def register_window(path, addr):
     the video, display or Turing controller waits on that subsystem being reachable at all,
     and an address no region covers means the read never touched hardware.
 
-    The sampled block is 64 KiB wide, so a region that merely overlaps it counts, and more
-    than one is reported as the ambiguity it is rather than resolved by picking the first.
+    `span` is how wide the sampled region is, and it is a parameter because round 21 made the
+    same twelve rows finer: 64 KiB for the wide reading, 16 bytes for the narrow one.  The
+    sampled block is what is being matched, so a region that merely overlaps it counts, and
+    more than one is reported as the ambiguity it is rather than resolved by picking the
+    first.
     """
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -231,7 +236,6 @@ def register_window(path, addr):
         return ["  no `0x<base> 0x<size> <name>` rows in %s -- regenerate it with "
                 "scripts/clover-register-map.py" % path]
 
-    span = 1 << 16
     hits = [(b, s, n) for b, s, n in rows if b < addr + span and addr < b + s]
     if not hits:
         near = min(rows, key=lambda r: abs(r[0] - addr))
@@ -247,19 +251,20 @@ def register_window(path, addr):
         out.append("    %-22s %#010x + %#010x" % (n, b, s))
     if len(hits) == 1:
         b, s, n = hits[0]
-        # The twelve rows name a 64 KiB block, not a register, so the honest statement is
-        # which part of the region the block covers and which part of the block the region
-        # sits in -- both, because the register is in the overlap and either half of the
-        # overlap can hang off the other side.
+        # The twelve rows name a block, not a register, so the honest statement is which part
+        # of the region the block covers and which part of the block the region sits in --
+        # both, because the register is in the overlap and either half of the overlap can hang
+        # off the other side.
         lo, hi = max(addr, b), min(addr + span, b + s)
         out.append("  so the polled register is %s: the block's %#x..%#x, which is that "
                    "region's %#x..%#x of its %#x mapped bytes -- whose power domain and "
                    "parent clock the acknowledgement waits on" %
                    (n, lo - addr, hi - 1 - addr, lo - b, hi - 1 - b, s))
     else:
-        out.append("  more than one region shares this block, so the 64 KiB the twelve rows "
-                   "give is not fine enough to name one of them; the driver would have to "
-                   "sample the register offset as well")
+        out.append("  more than one region shares this %#x-wide block, so the twelve rows are "
+                   "not fine enough to name one of them%s" %
+                   (span, "" if span > 16 else "; a 16-byte bucket that straddles two regions "
+                    "means the offset is at the boundary"))
     return out
 
 
@@ -444,7 +449,7 @@ def faults(path, table="mFaultBits"):
     return out
 
 
-def tick_addr_bits(path):
+def tick_addr_bits(path, table="mTickAddrBits"):
     """Round 20's second reading of the same twelve bands: { row, shift, "name" }, with no
     colour because every one of them is yellow and the colour is what says which of the two
     readings a photograph is in.
@@ -455,12 +460,16 @@ def tick_addr_bits(path):
     and `SlotIsLent()` on the device side reads the first one's rows for exactly that
     reason.  A driver from before round 20 simply has no such table and the reader stays in
     program-counter mode, which is what an old photograph means.
+
+    Round 21 adds a third table of the same shape -- the same twelve rows again as bits
+    15..4 of the polled register, the reading taken when the wide one says MMCC -- so this
+    reads whichever one is asked for.
     """
     try:
         src = path.read_text(encoding="utf-8")
     except (IOError, OSError):
         return []
-    head = src.find("mTickAddrBits[] = {")
+    head = src.find(table + "[] = {")
     if head < 0:
         return []
     body = src[head:src.find("\n};", head)]
@@ -469,11 +478,67 @@ def tick_addr_bits(path):
     for m in re.finditer(r"\{\s*(\d+)\s*,\s*(\d+)\s*,\s*\"([^\"]+)\"", body):
         row = int(m.group(1))
         if row >= len(rows):
-            raise SystemExit("an mTickAddrBits row names slot %d and the table has %d"
-                             % (row, len(rows)))
+            raise SystemExit("a %s row names slot %d and the table has %d"
+                             % (table, row, len(rows)))
         out.append({"off": rows[row]["off"], "row": row, "shift": int(m.group(2)),
                     "name": m.group(3)})
     return out
+
+
+def _hexsize(size):
+    """The device tree's own window size for a block, phrased so a missing one reads as a
+    question rather than as zero."""
+    return "%#x bytes" % size if size else "an unstated span"
+
+
+def tick_block(path):
+    """The base of the block round 21's narrow reading is an offset inside, from the driver's
+    own #define and nowhere else: 0xC8C is `0x0C8C0000 >> 16`, the value round 20's photograph
+    produced, and if the driver is ever pointed at another block the reader has to follow it
+    rather than keep repeating the old answer.
+    """
+    try:
+        src = path.read_text(encoding="utf-8")
+    except (IOError, OSError):
+        return None
+    m = re.search(r"#define\s+CLOVER_TICK_BLOCK_MMCC\s+\(?\s*(0x[0-9A-Fa-f]+)", src)
+    if not m:
+        return None
+    return int(m.group(1), 16) << 16
+
+
+def block_regions(path, base):
+    """What the tablet's own device tree says lives at one clock controller: its size and the
+    power domains inside it, as (size, [(offset, name)]).
+
+    Read from Resources/DTBs/clover.dts rather than typed out here because that file is the
+    thing round 20's reading was corroborated against, because Xiaomi's tree names domains
+    mainline does not, and because a 16-byte bucket that contains a GDSC register is a
+    different finding from one that contains a branch clock's RCGR triple.  Missing or
+    unreadable is not an error -- an older photograph simply has no offset to place.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (IOError, OSError):
+        return None, []
+    m = re.search(r"clock-controller@%x\s*\{([^{}]*)\}" % base, text)
+    if not m:
+        return None, []
+    size = None
+    reg = re.search(r"\breg\s*=\s*<0x[0-9a-fA-F]+\s+0x([0-9a-fA-F]+)>", m.group(1))
+    if reg:
+        size = int(reg.group(1), 16)
+    domains = []
+    for node in re.finditer(r"qcom,gdsc@[0-9a-fA-F]+\s*\{([^{}]*)\}", text):
+        body = node.group(1)
+        name = re.search(r'regulator-name\s*=\s*"([^"]+)"', body)
+        addr = re.search(r"\breg\s*=\s*<0x([0-9a-fA-F]+)\s+0x[0-9a-fA-F]+>", body)
+        if not (name and addr):
+            continue
+        offset = int(addr.group(1), 16) - base
+        if size is None or 0 <= offset < size:
+            domains.append((offset, name.group(1)))
+    return size, sorted(domains)
 
 
 def build_ladder(driver):
@@ -514,16 +579,17 @@ def build_ladder(driver):
         if band is None or band["kind"] != "slot":
             raise SystemExit("a tick row points at %#x, which is not a slot band" % entry["off"])
         band.setdefault("tick", []).append(entry)
-    for entry in tick_addr_bits(Path(driver)):
-        index = (entry["off"] - base) // pitch
-        band = ladder.get(index)
-        if band is None or band["kind"] != "slot":
-            raise SystemExit("an address row points at %#x, which is not a slot band"
-                             % entry["off"])
-        if not band.get("tick"):
-            raise SystemExit("mTickAddrBits row %d has no mTickBits row to be a second "
-                             "reading of" % entry["row"])
-        band["tick_addr"] = entry["shift"]
+    for key, table in (("tick_addr", "mTickAddrBits"), ("tick_reg", "mTickRegBits")):
+        for entry in tick_addr_bits(Path(driver), table):
+            index = (entry["off"] - base) // pitch
+            band = ladder.get(index)
+            if band is None or band["kind"] != "slot":
+                raise SystemExit("an address row points at %#x, which is not a slot band"
+                                 % entry["off"])
+            if not band.get("tick"):
+                raise SystemExit("%s row %d has no mTickBits row to be a second "
+                                 "reading of" % (table, entry["row"]))
+            band[key] = entry["shift"]
     return ladder, pitch
 
 
@@ -710,6 +776,10 @@ def main():
     ap.add_argument("--register-map", help="text file of scripts/clover-register-map.py output, "
                                            "so a polled register address prints the device "
                                            "region it sits in")
+    ap.add_argument("--dt", default=str(HERE.parent / "Resources/DTBs/clover.dts"),
+                    help="the tablet's own device tree source, so a narrow register reading "
+                         "names the clock controller it falls in and any power domain inside "
+                         "it (default: Resources/DTBs/clover.dts)")
     ap.add_argument("--debug", action="store_true")
     a = ap.parse_args()
 
@@ -892,12 +962,47 @@ def report(best, ladder, a):
             elif got_mode == "cyan":
                 mode = "fault"
 
+        # Round 18's table declared no bit positions at all and let the rows' order carry the
+        # weight; round 19 gave every row its shift explicitly.  Which convention a frame is
+        # written in is a property of the driver, not of the photograph, so decide it once here.
+        positional = not any(t.get("shift") is not None
+                             for _i, s in tick_rows for t in s["tick"])
+
+        def tick_role(s):
+            """Which kind of tick row a borrowed band is: a bit, one of the two marks that say
+            the layer is live and in which mode, or one of round 21's two flags.
+
+            Read off the entry colours rather than a row index, because the arrival row grew a
+            third colour in round 20 (cyan for a PC inside the image, red for one outside it,
+            yellow for a register address) and round 21 put red on a second row as well.  Only
+            the arrival row has ever had cyan, only a bit row has ever had a declared shift,
+            and of the two remaining marks the one that can also read red is the one that says
+            whether the block answered.
+
+            The last test only means anything from round 19, which is when the table started
+            declaring shifts; round 18 weighted its five rows by their order and declared none,
+            so for that driver every row that is not a mark is a bit.
+            """
+            entries = s["tick"]
+            if any(t["want"] == "white" for t in entries):
+                return "ours"
+            if any(t["want"] == "cyan" for t in entries):
+                return "arrival"
+            if positional or any(t.get("shift") for t in entries):
+                return "bit"
+            if any(t["want"] == "red" for t in entries):
+                return "liveness"
+            return "width"
+
         if mode == "tick":
             print("\ntick reading -- this driver holds the timer interrupt, so the borrowed rows "
                   "are the program counter, not the fault:")
             print("%-11s %-7s %-12s %-9s %s" % ("offset", "colour", "state", "seen", "also"))
             bits = []
             arrived = None
+            width = None
+            answered = None
+            roles = {}
             for i, s in tick_rows:
                 _y, seen = sample(i)
                 # The same second chance the fault rows get: a band this narrow can fall
@@ -906,23 +1011,33 @@ def report(best, ladder, a):
                 got = lit.get(i) or (seen if seen in LIT else None)
                 entries = s["tick"]
                 entry = next((t for t in entries if t["want"] == got), entries[0])
-                # The arrival row is the one band the table gives three colours to -- cyan
-                # for a tick whose PC was inside the image, red for one outside it, and from
-                # round 20 yellow for a sample that stopped reporting the PC and started
-                # reporting the register a poll is waiting on.  Any of the three is the tick
-                # speaking, not a wrong paint.
-                arrival = any(t["want"] in ("cyan", "red") for t in entries)
+                role = tick_role(s)
+                roles[i] = role
                 state = ("LIT" if got in [t["want"] for t in entries] else
                          ("dark" if not got else "WRONG(%s)" % got))
                 if got:
-                    if arrival:
+                    if role == "arrival":
                         if state == "LIT":
                             arrived = got
-                    elif entry["want"] == "yellow":
-                        bits.append((i, entry))
+                    elif role == "bit":
+                        if entry["want"] == "yellow":
+                            bits.append((i, entry))
+                    elif state == "LIT":
+                        # Either colour on the liveness row is the driver answering the
+                        # question it was built to ask -- red for the dead pattern, yellow for
+                        # a real value -- and the width row has exactly one colour to give.
+                        if role == "width":
+                            width = got
+                        elif role == "liveness":
+                            answered = got
                 print("%#011x %-7s %-12s %-9s %s / %s" %
                       (s["off"], entry["want"], state, seen, entry["name"], s["name"]))
             addr_mode = (arrived == "yellow")
+            # Narrow only when the driver ships a third table to read the rows with; a
+            # photograph cannot invent bits 15..4 out of a round-20 build, and silently
+            # decoding a wide address as an offset would be worse than saying so.
+            narrow = (addr_mode and width == "yellow" and
+                      any(ladder[i].get("tick_reg") is not None for i, _s in tick_rows))
             if arrived is None:
                 print("\nthe slot is ours and no tick ever arrived: the loop is running with "
                       "interrupts masked, which is a driver stuck at high TPL rather than a "
@@ -934,15 +1049,23 @@ def report(best, ladder, a):
                 # significant first -- and a photograph from that round still has to read the
                 # way that driver painted it, so the positional rule survives as the fallback
                 # for a table that declares no shifts.
-                order = [i for i, s in tick_rows
-                         if any(t["want"] == "yellow" for t in s["tick"])
-                         and not any(t["want"] in ("cyan", "red") for t in s["tick"])]
-                shifted = any((ladder[i].get("tick_addr") if addr_mode else entry["shift"])
-                              for i, entry in bits)
+                order = [i for i, s in tick_rows if roles.get(i, tick_role(s)) == "bit"]
+
+                def shift_of(i, entry):
+                    """The bit this row carries in the reading this photograph is holding: the
+                    program counter's, the polled register's wide bits, or round 21's offset
+                    bits inside the block."""
+                    if narrow:
+                        return ladder[i].get("tick_reg")
+                    if addr_mode:
+                        return ladder[i].get("tick_addr")
+                    return entry["shift"]
+
+                shifted = any(shift_of(i, entry) for i, entry in bits)
                 if shifted:
                     value = 0
                     for i, entry in bits:
-                        shift = (ladder[i].get("tick_addr") if addr_mode else entry["shift"])
+                        shift = shift_of(i, entry)
                         if shift:
                             value |= 1 << shift
                     page = value >> 12
@@ -960,6 +1083,39 @@ def report(best, ladder, a):
                           "the marks above are lit, so the sample was taken while the rows were "
                           "being erased rather than after one was painted -- photograph a boot "
                           "that has been sitting for a few seconds and this resolves")
+                    if addr_mode or narrow:
+                        print("  the other reading, which the flags cannot rule out: every bit "
+                              "the sample carries is zero, and that is a value a polled register "
+                              "can have -- the first 16 bytes of MMCC in the narrow reading, the "
+                              "block at address 0 in the wide one, which no region covers.  Take "
+                              "a second photograph: a real reading repeats and a race moves")
+                elif narrow:
+                    base = tick_block(Path(a.driver))
+                    bucket = value & ~0xF
+                    size, domains = block_regions(a.dt, base) if base else (None, [])
+                    print("\nthe arrival row is yellow and the width row is lit, so these twelve "
+                          "rows are bits 15..4 of the polled register: %s%#x..%#x, a 16-byte "
+                          "bucket" %
+                          (("MMCC + ") if base else "offset ", bucket, bucket | 0xF))
+                    if base:
+                        print("  in full that is %#x..%#x%s" %
+                              (base + bucket, base + bucket | 0xF,
+                               ", inside the %s the device tree declares for "
+                               "clock-controller@%x" % (_hexsize(size), base)
+                               if size else ""))
+                        if a.register_map:
+                            for line in register_window(a.register_map, base + bucket, 16):
+                                print(line)
+                    hits = [name for off, name in domains if bucket <= off <= bucket | 0xF]
+                    if hits:
+                        print("  that bucket holds %s -- one of the power domains this tablet's "
+                              "own tree hangs off the multimedia clock controller, so the wait "
+                              "is on a domain coming up, not on a branch clock's acknowledge bit"
+                              % ", ".join(hits))
+                    elif domains:
+                        print("  no power-domain register falls in that bucket; the tree names "
+                              "them at %s" %
+                              ", ".join("%#x %s" % (off, name) for off, name in domains))
                 elif addr_mode:
                     print("\nthe tick is parked in one of the two acknowledgement polls this "
                           "module can stop in, so the twelve rows are the address of the "
@@ -971,6 +1127,14 @@ def report(best, ladder, a):
                     else:
                         print("  (pass --register-map to have that address named as a "
                               "device region; scripts/clover-register-map.py builds it)")
+                    if any(roles.get(i) == "width" for i in roles):
+                        if width != "yellow":
+                            print("  the width row is dark, so the high bits name a block other "
+                                  "than the one round 21 narrows; these rows stay a 64 KiB "
+                                  "reading and the offset inside it is not known")
+                    else:
+                        print("  this driver has no narrow reading at all, so the register is "
+                              "known only to the 64 KiB block that contains it")
                 else:
                     print("\nthe tick found the PC at %#x..%#x of that image: page %d, %d of "
                           "the %d address rows lit%s" %
@@ -985,6 +1149,28 @@ def report(best, ladder, a):
                     if a.blob_map:
                         for line in blob_map(a.blob_map, page, value if shifted else None):
                             print(line)
+                # The liveness flag is the one thing an address cannot give: a register whose
+                # bit never arrives and a bus that answers nothing are different bugs, and only
+                # the word the loop itself tested tells them apart.  It is printed after the
+                # address because an offset means nothing for a block nobody is home in.
+                if addr_mode or narrow:
+                    if answered == "red":
+                        print("\nthe liveness row is red: the word this poll is testing reads "
+                              "the dead pattern for it -- all ones in the update handshake at "
+                              "0xab14, all zeros in the status wait at 0xa784.  The transaction "
+                              "completed and nothing drove the data, which points at the block "
+                              "being unpowered or clocked from a parent that never came up, not "
+                              "at a bit that is slow to clear")
+                    elif answered == "yellow":
+                        print("\nthe liveness row is yellow: the polled word is a real value, so "
+                              "the block answers and this is a bit hardware is not setting -- "
+                              "look for the parent clock or the power domain whose own enable "
+                              "was never confirmed")
+                    elif any(roles.get(i) == "liveness" for i in roles):
+                        print("\nthe liveness row is dark while the address rows are painted, "
+                              "which the driver does not do -- this frame caught the rows "
+                              "between the flag paint and the bit paint, and a second "
+                              "photograph resolves it")
         else:
             print("\n%s" % ("exception reading:" if live else
                             "exception reading is NOT LIVE -- the mark at 0x007c0000 is dark, "

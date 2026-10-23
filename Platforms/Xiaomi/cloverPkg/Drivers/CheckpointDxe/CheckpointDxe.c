@@ -1035,6 +1035,9 @@ FaultSeen (
 #define CLOVER_TICK_ARRIVED    13
 #define CLOVER_TICK_OUTSIDE    14
 #define CLOVER_TICK_ADDR_MODE  15
+#define CLOVER_TICK_WIDTH_FLAG 16            // rows 7: twelve rows are a block offset
+#define CLOVER_TICK_DEAD_FLAG  17            // row 8: the polled word is the dead pattern
+#define CLOVER_TICK_ALIVE_FLAG 18            // row 8: the polled word is real
 
 // The four INTIDs ArmTimerDxe registers, in the order it registers them.  Copied rather
 // than read from its header because that header is private to its driver, and because the
@@ -1097,6 +1100,35 @@ FaultSeen (
 // so a saturated reading is indistinguishable from round 19's rather than silently wrong.
 #define CLOVER_TICK_ADDR_SHIFT_MIN  16
 
+// Round 20 was read, and its twelve bits decoded to 0x0C8C0000 -- not a guess and not a
+// range this file invented, but a node in this tablet's own device tree:
+// `clock-controller@c8c0000 { compatible = "qcom,mmcc-sdm660"; reg = <0xc8c0000 0x40000>; }`
+// in Resources/DTBs/clover.dts, the MMSS Multimedia Clock Controller, whose consumers are
+// mdss_mdp, the DSI and DP controllers, venus, the camera front end and the MMSS SMMU.
+// The blob carries no such literal (its DALSYS device table stops at MMSS base
+// 0x0C800000 + 0x4000), which is why only the device could answer this.
+//
+// So round 21 keeps the same twelve bands and reads them 64 KiB narrower: bits 15..4, a
+// 16-byte bucket inside the block, which is where MMCC's RCGR triples live (a branch's
+// CLK_SRC, CLK_CFG and CLK_ENABLE sit 4 bytes apart, and the GDSCs the DT names at
+// 0xc8ce020 sit further up).  The narrow reading is taken only while the high bits still
+// say MMCC; if a future hang polls another block the rows fall back to round 20's wide
+// reading and the width flag below says which one a photograph is holding.
+#define CLOVER_TICK_BLOCK_MMCC     0xC8C      // 0x0C8C0000 >> 16, from the device tree
+#define CLOVER_TICK_REG_SHIFT_MIN  4          // the narrow reading's finest bit
+
+//
+// Which of the two polls the sample came from, because "nobody is home" has a different
+// word for each.  The update poll at 0xab14 spins while bit 0 stays set, so an all-ones
+// read is the dead signature and an all-zero read is impossible; the status poll at 0xa784
+// spins while bit 31 stays clear, so it is the other way round.  Both loops load into w9,
+// so the value the handler samples is the one in the interrupted context, and no second
+// MMIO read -- which would have to be justified all over again -- is needed.
+//
+#define CLOVER_TICK_KIND_NONE    0
+#define CLOVER_TICK_KIND_UPDATE  1
+#define CLOVER_TICK_KIND_STATUS  2
+
 STATIC CONST struct {
   UINTN    Row;
   UINT32   Argb;
@@ -1118,7 +1150,17 @@ STATIC CONST struct {
   { 14, CLOVER_COLOR_WHITE,   0, "the timer's GIC source is ours"                   },
   { 15, CLOVER_COLOR_CYAN,    0, "a tick arrived, with its PC inside that image"    },
   { 15, CLOVER_COLOR_RED,     0, "a tick arrived, with its PC outside that image"   },
-  { 15, CLOVER_COLOR_YELLOW,  0, "the twelve rows are the polled register, not the PC" }
+  { 15, CLOVER_COLOR_YELLOW,  0, "the twelve rows are the polled register, not the PC" },
+  //
+  // The two round-21 flags, kept after the twelve bit rows rather than in their ladder
+  // order because the paint loop addresses bit rows by index -- entries 0..11 are the
+  // twelve bits in all three tables, and anything inserted among them would misalign the
+  // address tables that share that indexing.  Their rows are ChipInfo (+0x300000) and the
+  // clock protocol (+0x340000), the two slots the index meter makes redundant.
+  //
+  {  7, CLOVER_COLOR_YELLOW,  0, "the twelve rows are a 16-byte offset inside MMCC" },
+  {  8, CLOVER_COLOR_RED,     0, "the polled word reads the dead pattern for this poll" },
+  {  8, CLOVER_COLOR_YELLOW,  0, "the polled word is a real value, the block answers" }
 };
 
 //
@@ -1145,6 +1187,30 @@ STATIC CONST struct {
   { 13, 20, "polled register, bit 20"                                                }
 };
 
+//
+// The same twelve bands again, this time as the offset inside the block -- bits 15..4, most
+// significant at the top of the ladder, which is the order the reader's own bit table
+// prints and the reason rows 9..13 run downwards here where the wide table above runs up.
+//
+STATIC CONST struct {
+  UINTN    Row;
+  UINTN    Shift;
+  CHAR8    *Name;
+} mTickRegBits[] = {
+  {  0, 15, "register offset, bit 15"                                                },
+  {  1, 14, "register offset, bit 14"                                                },
+  {  2, 13, "register offset, bit 13"                                                },
+  {  3, 12, "register offset, bit 12"                                                },
+  {  4, 11, "register offset, bit 11"                                                },
+  {  5, 10, "register offset, bit 10"                                                },
+  {  6,  9, "register offset, bit 9"                                                 },
+  {  9,  8, "register offset, bit 8"                                                 },
+  { 10,  7, "register offset, bit 7"                                                 },
+  { 11,  6, "register offset, bit 6"                                                 },
+  { 12,  5, "register offset, bit 5"                                                 },
+  { 13,  4, "register offset, bit 4 (a 16-byte bucket)"                              }
+};
+
 STATIC BOOLEAN                             mTickInstalled;
 STATIC BOOLEAN                             mTickArrived;
 STATIC BOOLEAN                             mTickOutsideShown;
@@ -1153,6 +1219,7 @@ STATIC UINTN                               mTickRegShown;
 STATIC BOOLEAN                             mTickAddressShown;
 STATIC UINT32                              mTickArrivedShown;
 STATIC UINT32                              mTickShownMask;
+STATIC UINTN                               mTickFlagsShown;   // row 7 and row 8, as offsets
 STATIC EFI_HARDWARE_INTERRUPT_PROTOCOL     *mInterrupt;
 STATIC UINT64                              mTickTicks;
 STATIC EFI_EVENT                           mTickEvent;
@@ -1249,8 +1316,13 @@ TickSeen (
   UINTN                       Reg;
   UINTN                       Value;
   UINTN                       Shift;
+  UINTN                       Kind;
+  UINTN                       Flags;
+  UINT32                      Word;
   UINT32                      Argb;
   BOOLEAN                     AddressMode;
+  BOOLEAN                     Narrow;
+  BOOLEAN                     Dead;
 
   // End of interrupt first, the way ArmTimerDxe does it, so a repaint of a 128 KiB band
   // cannot make the next tick be missed, and the timer is re-armed whether or not this
@@ -1295,27 +1367,73 @@ TickSeen (
   Bucket            = Delta >> CLOVER_TICK_SHIFT_MIN;
 
   /*
-    Round 20.  Round 19's photograph put the PC at 0xab14, which is the Huayra PLL's update
-    handshake: the driver sets bit 0 of a register and waits for hardware to clear it, with
-    no counter and no timeout, so the only thing left to learn is which register.  That is
-    x8 here, live across the two-instruction loop and loaded from the clock record at entry,
-    and the same is true of the other parkable poll at 0xa784 with its pointer in x10.  So
-    when the sample lands in either bucket the rows switch to that address, and the arrival
-    row says so in yellow.  Anywhere else the rows stay exactly the PC reading they were.
+    Rounds 20 and 21.  Round 19's photograph put the PC at 0xab14, the Huayra PLL's update
+    handshake -- set bit 0 of a register, wait for hardware to clear it, no counter and no
+    timeout -- so the only thing left was the register itself, which is x8 there and x10 in
+    the other parkable poll at 0xa784, both live across a two-instruction loop and both
+    loaded from the clock record at run time.  Round 20's photograph answered that: bits
+    27..16 decoded to 0x0C8C0000, which is this tablet's own `clock-controller@c8c0000`,
+    compatible "qcom,mmcc-sdm660" -- the MMSS Multimedia Clock Controller, and no literal
+    anywhere near it exists in the blob.  Round 21 narrows the same twelve bands to bits
+    15..4 of that register, a 16-byte bucket, which is the scale MMCC's RCGR triples and
+    its GDSCs are laid out on, and adds the one fact an offset cannot give by itself:
+    whether the word the loop is testing is a value at all.  Both polls load into w9, so
+    the interrupted context already holds it and no second MMIO read is needed to ask.
   */
-  Reg = 0;
+  Reg  = 0;
+  Word = 0;
+  Kind = CLOVER_TICK_KIND_NONE;
   if (Bucket == CLOVER_TICK_POLL_UPDATE) {
-    Reg = (UINTN)Context->X8;
+    Reg  = (UINTN)Context->X8;
+    Word = (UINT32)Context->X9;
+    Kind = CLOVER_TICK_KIND_UPDATE;
   } else if (Bucket == CLOVER_TICK_POLL_STATUS) {
-    Reg = (UINTN)Context->X10;
+    Reg  = (UINTN)Context->X10;
+    Word = (UINT32)Context->X9;
+    Kind = CLOVER_TICK_KIND_STATUS;
   }
 
-  AddressMode = ((Reg >> CLOVER_TICK_ADDR_SHIFT_MIN) < ((UINTN)1 << CLOVER_TICK_BIT_ROWS));
+  // Only a sample that knows which register a poll is waiting on can claim address mode.
+  // Round 20 did not check this, and its reading was fine only by luck of where the PC
+  // happened to sit: a tick anywhere else on the page left Reg at 0, and 0 >> 16 is well
+  // inside the twelve rows' reach, so the panel would have painted all twelve bands dark
+  // under a yellow "this is an address" label and the reader would have decoded a polled
+  // register of 0x00000000 -- an address that means nothing, reported as if it did.
+  AddressMode = (Kind != CLOVER_TICK_KIND_NONE) &&
+                ((Reg >> CLOVER_TICK_ADDR_SHIFT_MIN) < ((UINTN)1 << CLOVER_TICK_BIT_ROWS));
+
+  // Narrow only while the block is still the one round 20 named.  An offset means nothing
+  // for a register that has moved, so a photograph must never be read as MMCC + offset
+  // when the high bits say otherwise; it falls back to the wide reading instead, and the
+  // width flag below tells the two apart.
+  Narrow = AddressMode &&
+           ((Reg >> CLOVER_TICK_ADDR_SHIFT_MIN) == CLOVER_TICK_BLOCK_MMCC);
+
+  // The dead pattern is per poll, because each loop can only be spinning on the other
+  // one's: an update poll waits for bit 0 to clear, so a block that answers nothing reads
+  // all ones, while a status poll waits for bit 31 to come up, so the same block reads all
+  // zeros.  Either says the bus transaction completed and no device drove the data.
+  Dead = AddressMode &&
+         (((Kind == CLOVER_TICK_KIND_UPDATE) && (Word == 0xFFFFFFFFu)) ||
+          ((Kind == CLOVER_TICK_KIND_STATUS) && (Word == 0u)));
 
   Argb = AddressMode ? CLOVER_COLOR_YELLOW : CLOVER_COLOR_CYAN;
   if (mTickArrivedShown != Argb) {
     mTickArrivedShown = Argb;
     PaintTick (AddressMode ? CLOVER_TICK_ADDR_MODE : CLOVER_TICK_ARRIVED);
+  }
+
+  // The two flag rows move together and only inside address mode, so one comparison over
+  // all three states decides whether this sample has to touch them at all.  Outside
+  // address mode both go back to black, which is also their honest reading: a sample that
+  // never looked at a register has nothing to say about whether it answered.
+  Flags   = (UINTN)((AddressMode ? 1u : 0u) | (Narrow ? 2u : 0u) | (Dead ? 4u : 0u));
+  if (Flags != mTickFlagsShown) {
+    mTickFlagsShown = Flags;
+    PaintTickAs (CLOVER_TICK_WIDTH_FLAG, Narrow ? CLOVER_COLOR_YELLOW : CLOVER_COLOR_BLACK);
+    PaintTickAs (CLOVER_TICK_DEAD_FLAG,
+                 !AddressMode ? CLOVER_COLOR_BLACK :
+                 (Dead ? CLOVER_COLOR_RED : CLOVER_COLOR_YELLOW));
   }
 
   if (AddressMode) {
@@ -1336,9 +1454,9 @@ TickSeen (
 
   // Erase the bits the previous sample set before painting this one, so the bands are the
   // newest address and not the union of everything the loop has walked through.  This is
-  // load-bearing in a way round 19 did not need: the two modes put different weights on
-  // the same twelve bands, so a mode switch with no erase paints a PC reading under an
-  // address label.
+  // load-bearing in a way round 19 did not need: the three modes put different weights on
+  // the same twelve bands, so a mode switch with no erase paints one reading under
+  // another's label.
   for (Entry = CLOVER_TICK_FIRST_BIT; Entry < CLOVER_TICK_BIT_ROWS; Entry++) {
     if (((mTickShownMask >> Entry) & 1) != 0) {
       PaintTickAs (Entry, CLOVER_COLOR_BLACK);
@@ -1350,9 +1468,16 @@ TickSeen (
   Value = AddressMode ? Reg : Delta;
 
   for (Entry = CLOVER_TICK_FIRST_BIT; Entry < CLOVER_TICK_BIT_ROWS; Entry++) {
-    // The two tables list the same rows in the same order, so one index addresses both; the
-    // colour always comes from mTickBits because mTickAddrBits has none to give.
-    Shift = (AddressMode ? mTickAddrBits[Entry].Shift : mTickBits[Entry].Shift);
+    // The three tables list the same rows in the same order, so one index addresses all of
+    // them; the colour always comes from mTickBits, which is the only one that has any.
+    if (Narrow) {
+      Shift = mTickRegBits[Entry].Shift;
+    } else if (AddressMode) {
+      Shift = mTickAddrBits[Entry].Shift;
+    } else {
+      Shift = mTickBits[Entry].Shift;
+    }
+
     if (((Value >> Shift) & 1) != 0) {
       PaintTick (Entry);
       mTickShownMask |= (UINT32)(1u << Entry);

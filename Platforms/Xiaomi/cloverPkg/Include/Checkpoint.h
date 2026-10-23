@@ -110,6 +110,14 @@
     +0x500000 yellow   a tick arrived inside one of the two acknowledgement polls, and the
                        twelve rows above are then bits 27..16 of the register it is reading,
                        not of the program counter -- see round 20 below
+    +0x300000 yellow   round 21: the polled register is inside the block round 20 named, so
+                       the twelve rows are bits 15..4 of it -- a 16-byte offset within MMCC
+    +0x340000 red      round 21: the word the poll just tested is that poll's own dead pattern
+                       (all ones where it waits for bit 0 to clear, all zeros where it waits
+                       for bit 31 to come up), so the transaction completed and no device
+                       drove the data
+    +0x340000 yellow   round 21: the polled word is a real value, so the block answers and it
+                       is the bit that never arrives
 
   Round 18 was read, and its five page bits were the whole answer they could give: page 10
   of ClockDxe, which is the clock enable-and-acknowledge region and holds twelve candidate
@@ -121,9 +129,9 @@
   They are slots 0..6 (FV2, FVB, the CPU, the vendor fan-in GUID, ArmGicDxe, ArmTimerDxe,
   SmemDxe), the seven that have lit on every photograph since round 14 and that the index
   bands make redundant -- the module is named by its file number, not by its protocols.
-  SlotIsLent() is what keeps their notifications from colouring a band the tick owns, and
-  the two rows left in the middle (ChipInfo at +0x300000, the clock at +0x340000) are the
-  anchor that says the ladder has not moved.
+  SlotIsLent() is what keeps their notifications from colouring a band the tick owns.  Until
+  round 21 the two rows left in the middle (ChipInfo at +0x300000, the clock at +0x340000)
+  were spare, and they still anchor the ladder's geometry, but round 21 gives them a reading.
 
   Round 19 was read, and its twelve bits narrowed the page to one instruction: `0xab14`
   and its `tbnz` at `0xab18` -- set bit 0 of a command register, read it back, wait for the
@@ -143,6 +151,38 @@
   declares.  The arrival row turns **yellow** to say which reading the photograph is in, and
   stays cyan for an address twelve bits cannot reach (bits 16..27 stop at 256 MiB), so an
   out-of-range register degrades to a plain PC sample instead of painting a wrapped address.
+
+  Round 20 was read, and its twelve bits decoded to `0x0C8C0000`.  That is not a range this
+  file invented: it is a node of this tablet's own device tree, `clock-controller@c8c0000`,
+  `compatible = "qcom,mmcc-sdm660"`, `reg = <0xc8c0000 0x40000>` -- the MMSS multimedia clock
+  controller, whose consumers in the same tree are mdss_mdp, the two DSI controllers, the DP
+  controller, venus, the camera front end and the MMSS SMMU.  Nothing in the blob carries a
+  literal near it (its DALSYS device table stops at the MMSS base `0x0C800000` + `0x4000`),
+  which is the reason the answer had to come off the device.  The hang is therefore `ClockDxe`
+  waiting on MMCC, and two questions remain, which round 21 asks at once:
+
+  *which register inside it* -- the same twelve bands, read as bits 15..4 through a third
+  parallel table, mTickRegBits.  A 16-byte bucket is the scale MMCC's branch-clock triples
+  and its power domains are laid out on: the tree hangs eight GDSCs off this one controller,
+  at `+0x1024` venus, `+0x1040` venus_core0, `+0x2304` mdss, `+0x34a0` camss_top, `+0x3664`
+  vfe0, `+0x3674` vfe1, `+0x36d4` cpp and `+0xe020` bimc_smmu.  The narrow reading is taken
+  only while the high bits still say MMCC; another block falls back to round 20's 64 KiB
+  reading, and the width flag on ChipInfo's row is what tells a photograph which one it holds.
+
+  *whether the block is answering at all* -- an address cannot say.  Both polls load the word
+  they test into `w9` (`ldr w9,[x8]` and `ldr w9,[x10]`), so the interrupted context already
+  holds it and no second MMIO read has to be justified: all ones in the update handshake and
+  all zeros in the status wait are each that loop's own dead pattern, the signature of a
+  transaction that completed with nothing driving the data.  Those two go on the clock row,
+  and everything else that row can read is a real value with the bit simply not arriving --
+  a parent clock or a power domain whose enable was never confirmed, which is a different
+  driver bug from a dead bus.
+
+  One defect round 20 shipped with is fixed here rather than left as a footnote: its address
+  test was only `Reg >> 16 < 4096`, and a tick that landed anywhere *else* on the page left
+  `Reg` at zero, which passes.  That photograph would have painted all twelve rows dark under
+  a yellow "this is an address" label and decoded as a polled register of `0x00000000`.  The
+  reading is now taken only when the sample actually knows which poll it came from.
 
   A bit is therefore painted or erased by its own position in the driver's table, not by
   where its row happens to sit among the lit ones: round 18's decode counted yellow rows

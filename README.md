@@ -298,7 +298,12 @@ decodes the seven index bits against `scripts/fv-order.py`'s listing, and -- fro
 for the 32-byte bucket inside it.  From round 20 those same twelve rows carry a second
 reading, chosen by the arrival row's colour: when the sample lands in one of the two
 counter-free acknowledgement polls they are bits 27..16 of the register the module is
-waiting on, and `--register-map` names the device region that block falls in.
+waiting on, and `--register-map` names the device region that block falls in.  Round 21 adds
+a third reading and two flags: when that block is the one round 20's photograph named -- MMCC
+at `0x0c8c0000`, a node of this tablet's own device tree -- the twelve rows become bits 15..4
+of the register, a 16-byte bucket that `--dt` compares against the power domains hanging off
+that controller, the `+0x300000` band says so, and `+0x340000` says whether the word the loop
+tested was a value at all or the dead pattern a bus with nobody behind it returns.
 
 ```sh
 python3 scripts/fv-order.py            > ~/clover-out/fv-order.txt
@@ -336,6 +341,18 @@ only on a parent clock, while a block no region covers never reached hardware, w
 reader says in those terms and pairs with the nearest mapped neighbour.  Worth knowing
 before reading one: this build maps no CAM_CC, VIDEO_CC, MDSS or Turing window, so an
 address in any of those is a gap in the memory map as much as a clock bug.
+
+Round 20's photograph did not need the map to be finer than 64 KiB: its twelve bits decoded to
+`0x0c8c0000`, which is `clock-controller@c8c0000` in `Resources/DTBs/clover.dts`, `compatible =
+"qcom,mmcc-sdm660"` -- the MMSS multimedia clock controller, with `mdss_mdp`, both DSI
+controllers, the DP controller, venus, the camera front end and the MMSS SMMU as its listed
+consumers.  The blob contains no literal anywhere near it, which is why the answer came from
+the device rather than from the disk, and why `--dt` (that same file, by default) is what makes
+round 21's 16-byte bucket useful: it names the eight GDSCs the tree hangs off that controller
+(`+0x1024` venus, `+0x1040` venus_core0, `+0x2304` mdss, `+0x34a0` camss_top, `+0x3664` vfe0,
+`+0x3674` vfe1, `+0x36d4` cpp, `+0xe020` bimc_smmu) and says whether the polled register falls
+in one.  A bucket that is not a power domain is a branch clock's control triple, and the two
+readings call for different fixes.
 
 ## Status
 

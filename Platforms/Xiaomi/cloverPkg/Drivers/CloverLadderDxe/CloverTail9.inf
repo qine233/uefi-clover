@@ -1,0 +1,35 @@
+##
+#  clover: tail band 9 -- black band on yellow, below ConSplitterDxe.
+#
+#  A ninth band means SimpleTextInOutSerial, ConPlatformDxe and ConSplitterDxe
+#  returned, so only CloverGopDxe is left; green means it installed the GOP.
+#  See CloverLadderDxe.c for the reading table.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = CloverTail9
+  FILE_GUID                      = 72C8F10D-6B94-4E3A-A05F-8D2C1B76E493
+  MODULE_TYPE                    = UEFI_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = CloverLadderDxeEntry
+
+[Sources]
+  CloverLadderDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  BaseMemoryLib
+  DebugLib
+
+[BuildOptions]
+  *_*_*_CC_FLAGS = -DCLOVER_TAIL_BAND=9
+
+[Depex]
+  TRUE

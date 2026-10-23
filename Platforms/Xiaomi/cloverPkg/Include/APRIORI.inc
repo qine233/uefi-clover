@@ -81,7 +81,7 @@ APRIORI DXE {
   INF MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
 
   # Tail bands.  The yellow mark above says dispatch reached the top of the
-  # tail; these six say how far through it the dispatcher got, one black band
+  # tail; these nine say how far through it the dispatcher got, one black band
   # each on the yellow screen.  They only order, so their positions are the
   # whole message: keep each one immediately below the block it reports on.
   INF cloverPkg/Drivers/CloverLadderDxe/CloverTail1.inf
@@ -117,11 +117,14 @@ APRIORI DXE {
   # of what a framebuffer owner wants.
 
   INF Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail5.inf
   INF Binaries/clover/QcomPkg/Drivers/LimitsDxe/LimitsDxe.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail6.inf
   INF Binaries/clover/QcomPkg/Drivers/HashDxe/HashDxe.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail7.inf
   INF Binaries/clover/QcomPkg/Drivers/RNGDxe/RngDxe.inf
 
-  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail5.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail8.inf
 
   # Serial first: the UniXNU menu and the kernel console both run over
   # blsp1_uart2 at 115200 before the panel path is proven on this unit.
@@ -129,7 +132,7 @@ APRIORI DXE {
   INF MdeModulePkg/Universal/Console/ConPlatformDxe/ConPlatformDxe.inf
   INF MdeModulePkg/Universal/Console/ConSplitterDxe/ConSplitterDxe.inf
 
-  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail6.inf
+  INF cloverPkg/Drivers/CloverLadderDxe/CloverTail9.inf
 
   # Right before the console driver that needs it: the volume's only GOP
   # producer, over the window ABL left scanning.  Without it

@@ -1,8 +1,7 @@
 ##
-#  clover: tail band 6 -- black band on yellow, below ConSplitterDxe.
+#  clover: tail band 6 -- black band on yellow, below LimitsDxe.
 #
-#  A sixth band means SimpleTextInOutSerial, ConPlatformDxe and ConSplitterDxe
-#  returned, so only CloverGopDxe is left; green means it installed the GOP.
+#  A sixth band means LimitsDxe returned, so the stop is in HashDxe or RngDxe.
 #  See CloverLadderDxe.c for the reading table.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
@@ -11,7 +10,7 @@
 [Defines]
   INF_VERSION                    = 0x00010005
   BASE_NAME                      = CloverTail6
-  FILE_GUID                      = 72C8F10D-6B94-4E3A-A05F-8D2C1B76E493
+  FILE_GUID                      = A7D2C548-9E63-4B10-95FA-3C8E6B2D71A4
   MODULE_TYPE                    = UEFI_DRIVER
   VERSION_STRING                 = 1.0
   ENTRY_POINT                    = CloverLadderDxeEntry

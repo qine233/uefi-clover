@@ -806,19 +806,19 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
                       f"BdsDxe {bds_dxe + 1})")
 
         # The bands mean nothing without their order: band N is dispatched after
-        # the block it reports on, so the six have to run in index order between
+        # the block it reports on, so the nine have to run in index order between
         # BdsDxe and CloverGopDxe.  A band after the GOP would be painted over by
         # green anyway, which is why the last one stops at the console stack.
-        tails = [mark(f"CloverTail{i}.inf") for i in range(1, 7)]
+        tails = [mark(f"CloverTail{i}.inf") for i in range(1, 10)]
         gop = mark("CloverGopDxe/CloverGopDxe.inf")
         if any(position is None for position in tails) or gop is None:
-            problems.append("APRIORI.inc lost one of the six CloverTail bands or "
+            problems.append("APRIORI.inc lost one of the nine CloverTail bands or "
                             "CloverGopDxe, so the tail can no longer be counted")
         elif not (bds_dxe < tails[0]
                   and all(left < right for left, right in zip(tails, tails[1:]))
                   and tails[-1] < gop):
             problems.append("APRIORI.inc puts the tail bands out of order; they have "
-                            "to run Tail1..Tail6 between BdsDxe and CloverGopDxe, "
+                            "to run Tail1..Tail9 between BdsDxe and CloverGopDxe, "
                             "each one below the block it reports on")
         else:
             note("*", "APRIORI.inc counts the tail with bands at lines "
@@ -830,7 +830,7 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
         # of reporting it.  The index picks the row, so the filenames have to
         # agree with the build defines one for one.
         ladder = PKG / "Drivers" / "CloverLadderDxe"
-        for index in range(1, 7):
+        for index in range(1, 10):
             inf = ladder / f"CloverTail{index}.inf"
             if not inf.is_file():
                 problems.append(f"{inf.relative_to(REPO)} is missing")

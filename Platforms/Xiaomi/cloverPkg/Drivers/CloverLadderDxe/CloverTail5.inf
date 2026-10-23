@@ -1,8 +1,8 @@
 ##
-#  clover: tail band 5 -- black band on yellow, below RngDxe.
+#  clover: tail band 5 -- black band on yellow, below TzDxe.
 #
-#  A fifth band means TzDxe, LimitsDxe, HashDxe and RngDxe returned.  See
-#  CloverLadderDxe.c for the reading table.
+#  A fifth band means the Qualcomm TrustZone driver returned, so the stop is in
+#  LimitsDxe, HashDxe or RngDxe.  See CloverLadderDxe.c for the reading table.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
@@ -10,7 +10,7 @@
 [Defines]
   INF_VERSION                    = 0x00010005
   BASE_NAME                      = CloverTail5
-  FILE_GUID                      = D904E62B-1F83-4A75-8C2E-5B0A7D3F9E16
+  FILE_GUID                      = 4F0B8E27-6D31-4A95-8C7E-2B5A9D0F3E16
   MODULE_TYPE                    = UEFI_DRIVER
   VERSION_STRING                 = 1.0
   ENTRY_POINT                    = CloverLadderDxeEntry

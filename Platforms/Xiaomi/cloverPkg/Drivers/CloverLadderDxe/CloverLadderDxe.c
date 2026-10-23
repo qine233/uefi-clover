@@ -25,7 +25,19 @@
   bands and the last boundary crossed is known.  They are dispatched in
   APRIORI.inc order, so N bands means "every boundary up to N returned".  A
   band is never in the way of a later signal: CloverGopDxe's green fill covers
-  all six at once, which is exactly the reading "the whole tail returned".
+  all of them at once, which is exactly the reading "the whole tail returned".
+
+  Nine bands, in dispatch order:
+
+    1  BdsDxe returned
+    2  TLMM .. UsbfnDwc3 returned
+    3  UsbBus/UsbKb/UsbMassStorage returned
+    4  UsbMsd/UsbDevice/UsbConfig/Buttons/Tsens returned
+    5  TzDxe returned
+    6  LimitsDxe returned
+    7  HashDxe returned
+    8  RngDxe returned
+    9  the serial console stack returned
 
   Copyright (c) 2026, UniXNU contributors. All rights reserved.
   SPDX-License-Identifier: BSD-2-Clause-Patent
@@ -46,13 +58,13 @@
 #define CLOVER_PANEL_HEIGHT        1920
 
 //
-// Tail bands.  Six equal bands, well inside the panel and far enough apart to
-// count at arm's length: rows 240, 480, 720, 960, 1200, 1440, each 120 rows
-// tall.  Band 1 is the topmost.
+// Tail bands.  Nine equal bands, well inside the panel and far enough apart to
+// count at arm's length: rows 120, 320, ... 1720, each 90 rows tall.  Band 1
+// is the topmost.
 //
-#define CLOVER_BAND_TOP            240
-#define CLOVER_BAND_PITCH          240
-#define CLOVER_BAND_HEIGHT         120
+#define CLOVER_BAND_TOP            120
+#define CLOVER_BAND_PITCH          200
+#define CLOVER_BAND_HEIGHT         90
 
 //
 // Pixel byte 0 is blue, byte 1 green, byte 2 red: 0xFF0000FF reads as blue on

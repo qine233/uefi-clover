@@ -1,0 +1,34 @@
+##
+#  clover: tail band 8 -- black band on yellow, below RngDxe.
+#
+#  An eighth band means TzDxe, LimitsDxe, HashDxe and RngDxe all returned.
+#  See CloverLadderDxe.c for the reading table.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = CloverTail8
+  FILE_GUID                      = D904E62B-1F83-4A75-8C2E-5B0A7D3F9E16
+  MODULE_TYPE                    = UEFI_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = CloverLadderDxeEntry
+
+[Sources]
+  CloverLadderDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  BaseMemoryLib
+  DebugLib
+
+[BuildOptions]
+  *_*_*_CC_FLAGS = -DCLOVER_TAIL_BAND=8
+
+[Depex]
+  TRUE

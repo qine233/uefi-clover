@@ -135,6 +135,12 @@ UniXNU 菜单会盖掉绿色。于是：
 | 绿色 | GOP 已发布，问题在 BDS 之后：UniXNU 的启动项、payload 或应用本身 |
 | 菜单 | Stage 1 达成 |
 
+`v0.3.10` 实测走到了最后一行：绿灯之后 UniXNU 菜单出现在屏幕上，Stage 1 达成。
+payload 卷里的 `EFI/UniXNU/unixnu.toml` 写的是 `timeout = 3`、`default = "xnu"`，
+所以菜单停留 3 秒后默认进入 `Payloads/kernel.macho`（51.8 MB 的 4K XNU），参数
+`-v serial=3 debug=0x14e kt_fixed_zones=120 boot-progress=2`。这一步之后屏幕不会再有
+本文描述的任何标记，XNU 的输出只走 `blsp1_uart2`。
+
 黑条只报"调度顺序走到了哪里"：`[Depex] TRUE` 的探针即使前面的驱动因依赖未满足
 被跳过也会照常派发，所以条数不等于"这些驱动都成功了"，只等于"派发顺序已经越过
 它们的边界还没卡住"。真正卡死会停在某个驱动入口里，后面的条就不会出现。
@@ -281,10 +287,10 @@ fastboot flash boot ~/UniXNU-clover/facts/81ffcaaa-20261022-210928/img/unixnu-bo
 
 | 阶段 | 状态 |
 | --- | --- |
-| UEFI 到达 BDS，且移植所需服务齐全 | `CloverGopDxe` 已发布 GOP；simple text in/out、串口、`SdccDxe` 提供的 `BlockIo`/`SimpleFileSystem`、FV2 与 variable 栈均由 APRIORI 启动。仍需一次真正把菜单显示到屏幕上的启动来确认 |
-| UniXNU 菜单读取 payload 卷 | payload 已写入 `cache`；串口菜单可用，图形菜单等 GOP 实测 |
-| payload 交接给 DarwinBoot | 本机未开始 |
-| DarwinBoot 进入 XNU | 未开始 |
+| UEFI 到达 BDS，且移植所需服务齐全 | **已达成**（`v0.3.10`）：`CloverGopDxe` 发布 GOP，simple text in/out、串口、`SdccDxe` 提供的 `BlockIo`/`SimpleFileSystem`、FV2 与 variable 栈均由 APRIORI 启动，绿屏后进入菜单 |
+| UniXNU 菜单读取 payload 卷 | **已达成**（`v0.3.10`）：图形菜单在屏幕上渲染，读到了 `cache` 上的 `EFI/UniXNU/unixnu.toml`（`timeout = 3`，默认 `xnu` 项） |
+| payload 交接给 DarwinBoot | 默认项一启动就进入这一步：`kernel.macho` 已由 payload 卷提供，尚无串口输出记录 |
+| DarwinBoot 进入 XNU | 未确认 |
 | 存储与 root 设备 | 未开始 |
 | 用户态 | 未开始 |
 

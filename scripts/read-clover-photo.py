@@ -82,10 +82,17 @@ def classify(r, g, b):
     hi, lo = max(r, g, b), min(r, g, b)
     if lo > 140 and hi - lo < 45:
         return "white"
+    # Yellow is the one colour this camera renders dim: the panel paints 0xFFFF00 and the
+    # round-16 frame measures (134,255,23) to (141,251,33) on the index bands, so an
+    # r > 150 test called them "background" and the meter read zero while its own marks
+    # said it was live.  What separates yellow from every other band here is a high G
+    # with a mid-to-high R and a dead blue, so that is the test -- and it has to come
+    # *before* green, because the run's darker rows (124,255,14) would otherwise be
+    # claimed by green, whose own anchor is (0,228,79) with essentially no red in it.
+    if g > 150 and r > 100 and b < 130:
+        return "yellow"
     if g > 150 and r < 130 and b < 130:
         return "green"
-    if r > 150 and g > 150 and b < 130:
-        return "yellow"
     if r > 150 and b > 150 and g < 130:
         return "magenta"
     if g > 150 and b > 150 and r < 130:

@@ -96,6 +96,18 @@ APRIORI 条目启动时不评估 depex，所以它不依赖任何厂商 blob。
 没有 GOP 时 `GraphicsConsoleDxe` 起不来，UniXNU 会退回串口文本控制台——
 在平板上等于看不见，所以卷里必须有 `CloverGopDxe`，这条同样是检查项。
 
+"屏幕上什么都没变"分不清是"我们的代码没跑"还是"跑了但没画"，所以驱动里留了
+两段纯色填充作为阶段信号：`CloverGopDxe` 发布 GOP 后整屏涂**绿**，`BdsDxe`
+装上 BDS arch protocol（说明 DXE 调度队列已经走完）后整屏涂**蓝**。UniXNU
+菜单会盖掉这两种颜色。于是：
+
+| 屏幕 | 含义 |
+| --- | --- |
+| 一直停在 Mi 标志 | 连 `CloverGopDxe` 都没跑到，调度在更早的地方停了 |
+| 绿色 | GOP 已发布，但 BDS 没起来（调度在其后停住） |
+| 蓝色，没有菜单 | BDS 起来了，问题在 UniXNU 的启动项或应用本身 |
+| 菜单 | Stage 1 达成 |
+
 ## ClockDxe 为什么要打补丁
 
 本机固件卷里的 `ClockDxe` 在 SDM660 上会卡死在两处没有超时的硬件握手里：

@@ -37,6 +37,13 @@
   fill and buffer to video; GraphicsConsoleDxe uses buffer to video and reads
   the panel back with video to buffer when it redraws a character cell.
 
+  Two solid fills are the stage-1 liveness signals, because "the Mi splash is
+  still there" cannot tell "our code never ran" from "our code ran and never
+  drew". Green means this driver installed the GOP; blue means BdsDxe installed
+  its arch protocol, i.e. the DXE dispatcher ran to completion. The UniXNU menu
+  paints over either one. A screen that stays on the Mi splash means dispatch
+  stopped before either point; green alone means it stopped before BDS.
+
   Copyright (c) 2026, UniXNU contributors. All rights reserved.
   SPDX-License-Identifier: BSD-2-Clause-Patent
 **/
@@ -48,6 +55,7 @@
 #include <Library/MemoryAllocationLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 
+#include <Protocol/Bds.h>
 #include <Protocol/GraphicsOutput.h>
 
 //
@@ -132,6 +140,38 @@ FillRect (
   for (Row = 0; Row < Height; Row++) {
     SetMem32 (PixelAt (X, Y + Row), Width * CLOVER_BYTES_PER_PIXEL, (UINT32)Value);
   }
+}
+
+STATIC
+VOID
+PaintPanel (
+  IN UINT8  Blue,
+  IN UINT8  Green,
+  IN UINT8  Red
+  )
+{
+  EFI_GRAPHICS_OUTPUT_BLT_PIXEL  Pixel;
+
+  Pixel.Blue     = Blue;
+  Pixel.Green    = Green;
+  Pixel.Red      = Red;
+  Pixel.Reserved = 0;
+  FillRect (0, 0, CLOVER_PANEL_WIDTH, CLOVER_PANEL_HEIGHT, &Pixel);
+}
+
+STATIC EFI_EVENT  mBdsEvent;
+STATIC VOID       *mBdsRegistration;
+
+STATIC
+VOID
+EFIAPI
+CloverBdsStarted (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  PaintPanel (0xFF, 0, 0);
+  DEBUG ((DEBUG_INFO, "CloverGopDxe: BDS arch protocol installed, panel painted blue\n"));
 }
 
 STATIC
@@ -317,6 +357,35 @@ CloverGopDxeEntry (
     (UINT32)mCloverMode.FrameBufferSize,
     Status
     ));
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
 
-  return Status;
+  PaintPanel (0, 0xFF, 0);
+
+  //
+  // BdsDxe installs this protocol at its entry point; DxeCore calls BdsEntry
+  // once the dispatch queue is empty.  The callback is the last signal this
+  // driver can give without touching the boot manager.
+  //
+  Status = gBS->CreateEvent (
+                  EVT_NOTIFY_SIGNAL,
+                  TPL_CALLBACK,
+                  CloverBdsStarted,
+                  NULL,
+                  &mBdsEvent
+                  );
+  if (!EFI_ERROR (Status)) {
+    Status = gBS->RegisterProtocolNotify (
+                    &gEfiBdsArchProtocolGuid,
+                    mBdsEvent,
+                    &mBdsRegistration
+                    );
+  }
+
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_WARN, "CloverGopDxe: no BDS notification: %r\n", Status));
+  }
+
+  return EFI_SUCCESS;
 }

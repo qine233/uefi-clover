@@ -37,6 +37,7 @@
 
 [Protocols]
   gEfiGraphicsOutputProtocolGuid    ## PRODUCES
+  gEfiBdsArchProtocolGuid           ## CONSUMES        # notify: dispatch finished
 
 [Depex]
   TRUE

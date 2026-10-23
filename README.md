@@ -436,6 +436,36 @@ buffer the display driver chose.  And if the tablet still powers itself off with
 the shutdown never came through runtime services at all, which points the next round at the
 hardware watchdog instead.
 
+Round 24 came back with that third branch, and it is not a finding about the tablet: it is a
+finding about the instrument.  Bands, then a backlight over nothing, then a power-off that needs
+a ten-second hold to answer -- round 22's screen, round 23's screen, and now a fourth time, from
+a build that was supposed to stop the power-off.  The hook was installed.  It was not *kept*:
+`CheckpointDxe` writes `gRT->ResetSystem` at `APRIORI.inc` line 23, and line 76 of the same list
+is `ResetSystemRuntimeDxe`, whose entry point's first statement is
+`gRT->ResetSystem = RuntimeServiceResetSystem;`
+(`Mu_Basecore/MdeModulePkg/Universal/ResetSystemRuntimeDxe/ResetSystem.c:187`).  Fifty-three
+lines later the pointer every caller dereferences was somebody else's again, BDS's
+`EfiResetShutdown` went to the real service, and the tablet did what it has always done.  There
+is also nothing to install *under*: the same entry point then publishes
+`gEfiResetArchProtocolGuid` with a `NULL` interface (`ResetSystem.c:193-196`), so below the
+runtime table there is a flag that a reset happened is allowed, not a service that one can be
+intercepted in.  Round 25 therefore stops treating an install as permanent and treats it the way
+round 23 treats a pixel.  The tick handler already runs every millisecond and already repairs one
+bar of the ladder per visit; it now does one more comparison, `mRuntimeServices->ResetSystem ==
+CloverResetCaught`, and when that is false it puts the hook back and paints the same
+`+0x100000` band **green**, once.  Green is deliberately not one of the four reset colours,
+because the two are different kinds of fact: green says this instrument was disarmed and had to
+be re-armed, while yellow, red, cyan and white say somebody actually asked for an exit.  The tick
+is the right place for it and the timing is not close -- line 76 is dispatch, and rounds 18
+through 21 are nothing but samples taken from inside dispatch, so the restore lands a millisecond
+after the theft and long before the BDS ever reaches for the pointer.  What the row can now say
+about a boot that runs to the end: green means the theft was real and this round is the first
+build where a shutdown call has anywhere to go; a reset colour on top of it, or instead of it,
+means the call arrived and the boot is parked in the hook with the refresher sweeping; dark with
+the tablet still powering itself off is the one reading that keeps the watchdog theory alive.
+`read-clover-photo.py` names all three -- the row is five-valued now and reports `RE-ARMED` for
+green rather than folding it into "lit".
+
 ## Status
 
 | | |

@@ -43,6 +43,12 @@
 #  a screen that went dark.  Holding that call here instead of passing it on is what makes
 #  the picture stay up, and the band's colour keeps the requested reset type on the way.
 #
+#  Round 25 is the half that round 24 left off:  installing a runtime service is not holding one.
+#  ResetSystemRuntimeDxe sits 53 lines further down the same APRIORI list and its entry point
+#  writes that pointer back, so the tick now re-checks it every millisecond, puts the hook up
+#  again, and paints the band green the first time it has to -- green for "this instrument was
+#  disarmed and re-armed", where the four reset colours still mean a caller asked for an exit.
+#
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##
 

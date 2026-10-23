@@ -360,7 +360,20 @@ STATIC CONST struct {
   // photograph has to be taken inside ten seconds.  This band is that call, caught:  its
   // colour is the EFI_RESET_TYPE the caller asked for, and the hook that paints it never
   // returns, so the window is as long as the reader wants.
-  { 0x00100000, CLOVER_COLOR_YELLOW, "a reset was requested (yellow = shutdown)" }
+  //
+  // Round 24 found the row dark and the tablet powered off anyway, and the reason is an
+  // ordering fact rather than a mystery:  this driver is APRIORI DXE line 23
+  // (Include/APRIORI.inc) and ResetSystemRuntimeDxe is line 76, and that driver's entry
+  // point begins by writing its own function into the very slot round 24 had just taken
+  // (MdeModulePkg/Universal/ResetSystemRuntimeDxe/ResetSystem.c:187, `gRT->ResetSystem =
+  // RuntimeServiceResetSystem;`).  There is nothing below it to hook instead -- it
+  // installs gEfiResetArchProtocolGuid with a NULL interface, so the arch protocol is a
+  // flag here, not a service -- which leaves the runtime table pointer as the one choke
+  // point, and a choke point somebody else can write is not a choke point.  So round 25
+  // guards it the way round 23 guards the panel:  one compare per tick, ours written back
+  // when it is gone, and this row painted green the first time that happens.  Green means
+  // the hook was stolen and put back; the four reset colours still mean a call arrived.
+  { 0x00100000, CLOVER_COLOR_YELLOW, "a reset was requested (yellow = shutdown, green = the hook was stolen)" }
 };
 
 
@@ -1297,6 +1310,14 @@ STATIC UINTN                               mHealCursor;       // which bar this 
 // loop that stores to it from being optimised into a boot that falls through to whatever
 // comes after a call that never returns.
 STATIC volatile UINTN                      mResetHookHeld;
+
+// Round 25: the runtime service table whose ResetSystem slot round 24 took, remembered so
+// the tick can look at it again, and the flag that says the green "it was taken back off
+// us" band has already been painted.  The second exists because a restore happens on every
+// millisecond afterwards, and a band that is repainted continuously is a band the round-23
+// refresher would fight and a reader could never place in time.
+STATIC EFI_RUNTIME_SERVICES  *mRuntimeServices;
+STATIC BOOLEAN               mResetStolenPainted;
 STATIC EFI_EVENT                           mTickEvent;
 STATIC VOID                                *mTickRegistration;
 
@@ -1440,6 +1461,56 @@ HealBar (
   instrument -- the frame this handler is handed is the frame the vector table returns
   from, which is what makes an interrupt able to retarget the interrupted thread at all.
 **/
+// Round 25 asks what the reset slot is supposed to hold, and the hook that owns the answer
+// is defined below the tick layer, next to the entry point that installs it.
+STATIC
+VOID
+EFIAPI
+CloverResetCaught (
+  IN EFI_RESET_TYPE  ResetType,
+  IN EFI_STATUS      ResetStatus,
+  IN UINTN           DataSize,
+  IN VOID            *ResetData OPTIONAL
+  );
+
+/**
+  Round 25: keep the way out of the platform shut.
+
+  One compare, once per millisecond.  Round 24 installed its hook at APRIORI DXE line 23 and
+  came back reading exactly the screen round 23 did, because line 76 of that list is
+  ResetSystemRuntimeDxe and its entry point's first statement re-points the same runtime
+  table member at its own function.  Nothing here can be installed lower instead:  that
+  driver publishes `gEfiResetArchProtocolGuid` with a NULL interface, so below the table
+  there is a flag and not a service.  A choke point somebody else can write over is not a
+  choke point, so it is guarded the way the panel is guarded.
+
+  The band is painted once.  After the first restore the pointer stays ours for the rest of
+  the boot -- line 76 has had its turn -- and a row repainted every millisecond would be a
+  row the round-23 refresher argues with and no photograph could place in time.
+
+  Green, and not one of the four reset colours, because the two facts are different kinds of
+  fact:  green says this instrument was disarmed and re-armed, and the four say somebody
+  actually asked.
+**/
+STATIC
+VOID
+GuardResetHook (
+  VOID
+  )
+{
+  if ((mRuntimeServices == NULL) ||
+      (mRuntimeServices->ResetSystem == CloverResetCaught)) {
+    return;
+  }
+
+  mRuntimeServices->ResetSystem = CloverResetCaught;
+
+  if (!mResetStolenPainted) {
+    mResetStolenPainted = TRUE;
+    CloverCheckpointBar (CLOVER_RESET_BAND, CLOVER_COLOR_GREEN);
+  }
+}
+
 STATIC
 VOID
 EFIAPI
@@ -1481,6 +1552,13 @@ TickSeen (
   // nothing else can do -- every other paint in this driver happens once, at the moment its
   // fact becomes true.
   HealBar ();
+
+  // Round 25, and second for the same reason the refresher is first: this pointer is written
+  // by somebody else's entry point 53 lines after ours, and if it is still theirs when BDS
+  // reaches for it, this round reads exactly like the three before it.  Ahead of the fault
+  // return below, because a boot that took a synchronous exception on the way out still has
+  // to have its way out guarded.
+  GuardResetHook ();
 
   if (mFaultPainted) {
     return;
@@ -1816,6 +1894,13 @@ TimerAppeared (
   replacing the member is the one place that sees a shutdown from BDS, a reset from a
   vendor blob and a `ResetUtilityLib` call alike, without naming any of them.
 
+  Round 25 is the reason that sentence needed a second half.  Installing it once, at APRIORI
+  DXE line 23, was not a hook: line 76 is `ResetSystemRuntimeDxe`, its entry point writes the
+  same member with its own function, and round 24 therefore came back reading the same screen
+  round 23 had.  This is the same instance `GuardResetHook` puts back every millisecond, and
+  the pair is what makes the slot worth reading:  the hook is the ear, the guard is what keeps
+  it attached.
+
   What it does is paint one band and stop.  The colour is the requested type, because the
   type is the part worth keeping:  yellow means somebody asked for a shutdown, which is
   what BDS's no-OS exit asks for, while red or cyan would mean a cold or warm reset and
@@ -1925,7 +2010,11 @@ CheckpointDxeEntry (
   // does not link UefiRuntimeServicesTableLib, and it does not link it because nothing
   // else in it needs a runtime service.  SystemTable->RuntimeServices is the same
   // structure gRT points at, so this writes the pointer every caller dereferences.
-  SystemTable->RuntimeServices->ResetSystem = CloverResetCaught;
+  //
+  // Round 25 keeps the address of that structure in a module global, because the guard that
+  // has to run after it cannot reach an argument of the entry point.
+  mRuntimeServices = SystemTable->RuntimeServices;
+  mRuntimeServices->ResetSystem = CloverResetCaught;
 
   for (Index = 0; Index < ARRAY_SIZE (mSlots); Index++) {
     if (EFI_ERROR (gBS->CreateEvent (

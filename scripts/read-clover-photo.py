@@ -79,6 +79,15 @@ RESET_TYPE_BY_COLOR = {
     "cyan":   "EfiResetWarm",
     "white":  "EfiResetPlatformSpecific",
 }
+# Round 25 gives that row a fifth colour, and it is not a reset type.  The hook that paints the
+# four was installed at APRIORI DXE line 23, and line 76 of the same list is
+# ResetSystemRuntimeDxe, whose entry point overwrites the very pointer the hook lives in --
+# which is why round 24 read exactly like round 23.  A guard now re-attaches it every
+# millisecond and paints this row green the first time it has to, so the row carries two kinds
+# of fact:  green says this instrument was disarmed and re-armed, and the other four say a
+# caller actually asked for an exit.  The last paint wins, so green under a later yellow is
+# simply a boot that got as far as the shutdown after being re-armed.
+STOLEN_BY_COLOR = {"green": "the hook was stolen and put back"}
 # The stage bands are not in the table; they are what the geometry is anchored to, and
 # the only two of them that can be identified before the fit is known.
 STAGES = {-4: "green", -2: "magenta"}
@@ -396,10 +405,29 @@ def read_strip(grid, h, w, center, span):
 
 
 def anchors_of(classes):
-    found = {}
+    """The two stage bands the geometry is anchored to: green at ladder index -4 and magenta
+    at -2.
+
+    Round 25 puts a second green band on the panel, three pitches below the magenta one --
+    that is what "the guard took the hook back" looks like -- so "the first run of this colour"
+    stopped being a safe definition of the anchor.  On a frame cropped above the green stage it
+    would have anchored the model on the reset band, which is three pitches low and gives a
+    pitch a third too small, and every band below it lands in the gap beside its own bar.  The
+    one relation the two anchors always have is that the green is the higher of the pair, so
+    that is now the rule, and a frame that shows only greens below its magenta reports that it
+    has no anchors rather than reporting a reading built on the wrong band.
+    """
+    runs = {}
     for c, lo, hi in ranges(classes, {"green", "magenta"}):
         if hi - lo >= 1:
-            found.setdefault(c, (lo + hi) / 2.0)
+            runs.setdefault(c, []).append((lo + hi) / 2.0)
+    found = {}
+    if runs.get("magenta"):
+        ym = runs["magenta"][0]
+        above = [y for y in runs.get("green", []) if y < ym]
+        if above:
+            found["magenta"] = ym
+            found["green"] = above[0]
     return found
 
 
@@ -577,7 +605,7 @@ def build_ladder(driver):
                              "want": forced or entry["want"], "name": entry["name"],
                              "bit": entry.get("bit")}
             if kind == "mark" and entry["name"].startswith("a reset was requested"):
-                ladder[index]["reset"] = RESET_TYPE_BY_COLOR
+                ladder[index]["reset"] = dict(RESET_TYPE_BY_COLOR, **STOLEN_BY_COLOR)
     for entry in faults(Path(driver)):
         index = (entry["off"] - base) // pitch
         band = ladder.get(index)
@@ -875,12 +903,27 @@ def report(best, ladder, a):
         if not got:
             return "dark"
         if s.get("reset"):
+            if got == "green":
+                return "RE-ARMED"
             return "LIT: %s" % s["reset"].get(got, "a type no caller passes")
         if got == s["want"]:
             return "LIT"
         if s["want"] == "white" and got == "cyan":
             return "LIT(white)"
         return "WRONG(%s)" % got
+
+    def color_at(s, i, seen):
+        """The colour a row is holding, or None when it is dark.
+
+        LIT is the set of colours that mean "a bit of this boot is true" everywhere else on
+        the ladder, and green is not in it -- green is the stage anchor, and counting it as
+        lit would read a photograph's own geometry as a finding.  The reset row is the one
+        place that has a green meaning, round 25's "the hook was stolen and put back", so the
+        exception is made for that row alone rather than for the whole table."""
+        got = lit.get(i)
+        if got is None and (seen in LIT or (s.get("reset") and seen == "green")):
+            got = seen
+        return got
 
     def report_kind(kind, label):
         print("\n%s" % label)
@@ -891,7 +934,7 @@ def report(best, ladder, a):
             if s["kind"] != kind:
                 continue
             _y, seen = sample(i)
-            got = lit.get(i) or (seen if seen in LIT else None)
+            got = color_at(s, i, seen)
             # A slot row that a report layer borrowed is no longer the slot's own colour:
             # the driver suppresses that paint on purpose (SlotIsLent) so the report can be
             # read there.  Calling the yellow of a tick bit "WRONG", or a dark borrowed row
@@ -954,11 +997,25 @@ def report(best, ladder, a):
     reset_row = next((i for i in sorted(ladder) if ladder[i].get("reset")), None)
     if reset_row is not None:
         _y, seen = sample(reset_row)
-        got = lit.get(reset_row) or (seen if seen in LIT else None)
+        got = color_at(ladder[reset_row], reset_row, seen)
         held = sum(1 for i in ladder
                    if ladder[i]["kind"] == "slot" and not
                    (ladder[i].get("fault") or ladder[i].get("tick")) and lit.get(i))
-        if got:
+        if got == "green":
+            print("\nTHE HOOK WAS STOLEN AND PUT BACK.  Round 24 installed it once, at APRIORI "
+                  "DXE line 23, and ResetSystemRuntimeDxe's entry point at line 76 wrote the "
+                  "same pointer back over it, so BDS's shutdown went to the real service and "
+                  "the tablet powered off with nothing on the panel -- which is exactly what "
+                  "rounds 22 and 23 did, and what this row now proves was the reason.  Green is "
+                  "the guard finding the pointer not-ours and taking it back, once.  The boot "
+                  "then carried on:  read the rest of the ladder as the furthest this firmware "
+                  "has ever got, and if a reset colour sits here instead of green the caller got "
+                  "through to the hook we re-armed.")
+            if held:
+                print("%d protocol slot(s) are lit, so the panel holds what the ladder paints "
+                      "and the theft was the only thing standing between this boot and a "
+                      "photograph." % held)
+        elif got:
             print("\nRESET REQUESTED: %s.  This build holds the boot at that call instead "
                   "of letting it cut the power, so the picture is stable and there is no "
                   "rush to photograph it." % ladder[reset_row]["reset"].get(got, got))
@@ -972,11 +1029,13 @@ def report(best, ladder, a):
                       "scanning %s, so the next round has to draw where the display driver "
                       "pointed the scan-out rather than where BootShim filled." % "0x9D400000")
         else:
-            print("\nthe reset band is dark, so no caller went through gRT->ResetSystem "
-                  "before this frame was taken.  If the tablet still powered itself off, "
-                  "the shutdown came from somewhere this hook cannot see -- a hardware "
-                  "watchdog barking, or a driver that reaches the PMIC without asking the "
-                  "runtime services -- and that is what the next round goes after.")
+            print("\nthe reset band is dark, so neither event happened while this frame was "
+                  "alive:  nobody wrote our pointer back, and no caller went through "
+                  "gRT->ResetSystem before the photograph was taken.  If the tablet still "
+                  "powered itself off, the shutdown came from somewhere neither the hook nor "
+                  "the guard can see -- a hardware watchdog barking, or a driver that reaches "
+                  "the PMIC without asking the runtime services -- and that is what the next "
+                  "round goes after.")
 
     report_rows = [(i, ladder[i]) for i in sorted(ladder)
                    if ladder[i].get("fault") or ladder[i].get("tick")]

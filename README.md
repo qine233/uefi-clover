@@ -293,8 +293,9 @@ The screen is the only output channel, so the ask every round is the same: one p
 the ladder, held square to the panel if that is easy and however it comes out if it is
 not.  `scripts/read-clover-photo.py` finds the reading strip itself, tries all four
 orientations and keeps whichever explains the most bands, then reports the slot ladder,
-decodes the seven index bits against `scripts/fv-order.py`'s listing, and -- from round 18
--- decodes the five tick bits against a blob's own disassembly:
+decodes the seven index bits against `scripts/fv-order.py`'s listing, and -- from round 19
+-- decodes twelve tick bits against a blob's own disassembly: four for the page and eight
+for the 32-byte bucket inside it.
 
 ```sh
 python3 scripts/fv-order.py      > ~/clover-out/fv-order.txt
@@ -303,10 +304,17 @@ python3 scripts/read-clover-photo.py photo.jpg \
   --blob-map ~/clover-out/clockdxe-pages.txt
 ```
 
+Pass `--driver ~/clover-out/roundNN-CheckpointDxe.c` to read an archived frame: which band
+carries which bit is read out of the driver the photograph was built from, and every round
+keeps a copy of that driver next to its image.  Without it the reader uses the working tree,
+which is right for the newest photo and wrong for an old one.
+
 The `--blob-map` file is what `scripts/scan-clover-spins.py` builds from a GNU objdump
 listing of the suspect blob (run the disassembly in the colima guest; the host `/usr/bin/objdump`
 is LLVM's and rejects `-b`), and it turns "page 11" into the twenty-two `b .` halts sharing
 that page, with the source file, line number and the expression each was about to report.
+With a round-19 photograph the same table is filtered to the sampled bucket, so a reading
+names one site rather than one page.
 Two things came out of building it that no photograph can tell us.  Almost every `b .` in
 `ClockDxe` has an ASSERT() report call in front of it -- 128 of its 130 sites resolve to a
 `__FILE__`, and the scan marks the two that do not -- so the spins the ladder names are

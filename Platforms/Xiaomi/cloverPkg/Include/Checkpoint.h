@@ -90,16 +90,42 @@
   this driver holds the timer's tick and the rows below are the tick's, **cyan** means a
   translation fault overwrote it and the whole table above is live.  When it is white:
 
-    +0x380000 yellow   tick PC page, bit 4    \
-    +0x3C0000 yellow   tick PC page, bit 3     |  five bits of (ELR - last image base) >> 12,
-    +0x400000 yellow   tick PC page, bit 2     |  so which 4 KiB of the module the meter
-    +0x440000 yellow   tick PC page, bit 1     |  already named the core was sitting in
-    +0x480000 yellow   tick PC page, bit 0    /
+    +0x140000 yellow   tick PC, bit 11 (the page's upper half)  \
+    +0x180000 yellow   tick PC, bit 10                          |
+    +0x1C0000 yellow   tick PC, bit 9                           |  seven bits of the address
+    +0x200000 yellow   tick PC, bit 8                           |  from bit 11 down to bit 5,
+    +0x240000 yellow   tick PC, bit 7                           |  i.e. which 32 bytes of the
+    +0x280000 yellow   tick PC, bit 6                           |  page the core was sitting
+    +0x2C0000 yellow   tick PC, bit 5                          /   on
+    +0x380000 yellow   tick PC page, bit 4 (the 64 KiB half)   \
+    +0x3C0000 yellow   tick PC page, bit 3                      | five bits of
+    +0x400000 yellow   tick PC page, bit 2                      | (ELR - last image base)>>12
+    +0x440000 yellow   tick PC page, bit 1                      |
+    +0x480000 yellow   tick PC page, bit 0                     /
     +0x4C0000 white    the timer's GIC source is ours, taken from ArmTimerDxe by removing
                        its handler and registering this driver's in its place
     +0x500000 cyan     a tick arrived with its PC inside that image
     +0x500000 red      a tick arrived with its PC outside it, which says the loop is in a
                        library the core linked rather than in the module the index names
+
+  Round 18 was read, and its five page bits were the whole answer they could give: page 10
+  of ClockDxe, which is the clock enable-and-acknowledge region and holds twelve candidate
+  sites -- two counter-free hardware polls waiting on bit 31 and on bit 0 clearing, three
+  ASSERT(0)s in the Huayra PLL template, six library asserts and one bare `b .`.  "An ack
+  bit that never arrives" and "an assert that parked the CPU in CpuDeadLoop" are different
+  bugs with different fixes, and one page could not tell them apart, so the seven rows at
+  the top of the ladder came from the protocol slots to make the sample twelve bits wide.
+  They are slots 0..6 (FV2, FVB, the CPU, the vendor fan-in GUID, ArmGicDxe, ArmTimerDxe,
+  SmemDxe), the seven that have lit on every photograph since round 14 and that the index
+  bands make redundant -- the module is named by its file number, not by its protocols.
+  SlotIsLent() is what keeps their notifications from colouring a band the tick owns, and
+  the two rows left in the middle (ChipInfo at +0x300000, the clock at +0x340000) are the
+  anchor that says the ladder has not moved.
+
+  A bit is therefore painted or erased by its own position in the driver's table, not by
+  where its row happens to sit among the lit ones: round 18's decode counted yellow rows
+  and would have re-weighted every bit if a row were inserted, which is exactly what
+  happened here.
 
   White lit and +0x500000 dark is the other answer, and it is not a failure of the
   instrument: the only way a tick can be registered and never arrive is for the loop to run
@@ -122,9 +148,11 @@
   What it costs is still real, and it is one thing: ArmTimerDxe's handler is what reloads
   the compare value and calls the DXE core's timeout notify.  This handler reloads the
   compare, so the ticks keep coming, and does not call the notify, so event timeouts stop
-  being processed for everything APRIORI-queued after line 32.  ArmTimerDxe's own band
-  (slot 5, +0x280000) stays lit, because its protocol really did install -- the ladder is
-  meant to read like round 17's, with the difference confined to these seven rows.
+  being processed for everything APRIORI-queued after line 32.  The sample is last-writer-
+  wins for the same reason it is coarse-grained-but-not-too-coarse: the tick also fires
+  during ordinary dispatch, so the value that stops changing is the one the loop is parked
+  at, and the erase-before-paint keeps the bands from becoming the union of every address
+  the loop walked through on the way there.
 
   Rounds 9 through 13 are the reason the table is this shape, and each of the three
   parts answers a reading that came back ambiguous.

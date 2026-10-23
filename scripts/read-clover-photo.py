@@ -205,14 +205,19 @@ def modules(path):
     return out
 
 
-def blob_map(path, page):
+def blob_map(path, page, delta=None):
     """The halt sites scripts/scan-clover-spins.py found on one page of a loaded blob.
 
     A page number is only worth the listing behind it: page 11 of `ClockDxe` is not a
     count, it is `HALclkHuayraPLLTemplate.c:622` and the twenty-one other self-branches
-    sharing that page.  Absence is an answer too, and a different one -- a tick that
-    lands on a page the scan lists no sites for is inside a loop that has an exit, not
-    inside a halt, so say that rather than complaining about the file.
+    sharing that page.  Given round 19's twelve-bit sample the answer narrows to one row of
+    that listing, which is the difference between "somewhere in the clock enable path" and
+    "the poll that waits for bit 31 of a register the clock record points at".
+
+    Absence is an answer too, and a different one in each direction -- a tick that lands on
+    a page the scan lists no sites for is inside a loop that has an exit rather than inside
+    a halt, and a tick on a page that has sites but in another bucket is doing ordinary
+    work.  Say both rather than complaining about the file.
     """
     try:
         lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -233,10 +238,12 @@ def blob_map(path, page):
                 % (page, path)]
 
     out = ["\n%s line %d:" % (path, start + 1), lines[start]]
+    body = []
     for l in lines[start + 1:]:
         if not l.startswith("    0x"):
             break
-        out.append(l)
+        body.append(l)
+    out.extend(body)
     # The polls live in their own section at the foot of the file, keyed by the same
     # page marker, and they are the sites a tick can be caught in mid-loop rather than
     # at a halt, so they belong under the same answer.
@@ -244,12 +251,40 @@ def blob_map(path, page):
     if polls:
         out.append("    counter-free hardware bit polls on this page:")
         out.extend(polls)
-    if any("[no signature]" in l for l in out):
-        out.append("    one row above has no ASSERT() signature, which is what CpuDeadLoop() "
-                   "compiles to -- so a tick on this page is also consistent with an assert "
-                   "having parked the CPU, and the five bits cannot tell that halt from the "
-                   "page's other sites")
-    return out
+
+    if delta is None:
+        if any("[no signature]" in l for l in out):
+            out.append("    one row above has no ASSERT() signature, which is what "
+                       "CpuDeadLoop() compiles to -- so this page is also consistent with an "
+                       "assert having parked the CPU, and a five-bit sample cannot separate "
+                       "that halt from the page's other sites")
+        return out
+
+    # Twelve bits of the address is a 32-byte bucket, and every site on the page is a row
+    # of the listing, so the question is simply which rows fall inside it.
+    addr = re.compile(r"^    0x([0-9a-f]{5,7})\b")
+    bucket = delta & ~0x1f
+    here = [l for l in body + polls
+            if (m := addr.match(l)) and (int(m.group(1), 16) & ~0x1f) == bucket]
+    if not here:
+        return out + ["\nnone of this page's %d sites is in the sampled bucket %#x..%#x, so the "
+                      "PC is in code the scan files as neither halt nor poll -- a loop with an "
+                      "exit, or ordinary work. The module is busy, not parked."
+                      % (len(body) + len(polls), bucket, bucket + 31)]
+    head = ["\nthe sampled bucket %#x..%#x is these rows:" % (bucket, bucket + 31)]
+    head.extend(here)
+    if any("PAGE" in l for l in here):
+        head.append("    a poll with no counter and no timeout: the hardware bit it waits for "
+                    "never arrives, so this is the register, not the code, and the loop never "
+                    "leaves it")
+    elif any("[no signature]" in l for l in here):
+        head.append("    a bare `b .` with no ASSERT() report in front of it, so this is not an "
+                    "assert halt and not a poll -- a self-branch the compiler emitted for a "
+                    "loop that cannot end")
+    else:
+        head.append("    an ASSERT() halt: the report call ran, printed to the serial port this "
+                    "tablet has no cable for, and the CPU has been parked here since")
+    return out + head
 
 
 def ranges(rowcls, keep):
@@ -335,12 +370,19 @@ def faults(path, table="mFaultBits"):
         return []
     body = src[head:src.find("\n};", head)]
     out = []
-    for m in re.finditer(r"\{\s*(\d+)\s*,\s*(CLOVER_COLOR_\w+)\s*,\s*\"([^\"]+)\"", body):
+    # An entry is { row, CLOVER_COLOR_X, [shift], "name" }.  The shift appeared in round 19,
+    # when the tick layer grew from five page bits to twelve address bits: a row then
+    # carries the bit it says it carries, so neither the driver nor this reader has to
+    # weight rows by the order they happen to sit in.
+    for m in re.finditer(
+        r"\{\s*(\d+)\s*,\s*(CLOVER_COLOR_\w+)\s*(?:,\s*(\d+))?\s*,\s*\"([^\"]+)\"", body
+    ):
         row = int(m.group(1))
         if row >= len(rows):
             raise SystemExit("a %s row names slot %d and the table has %d" % (table, row, len(rows)))
         out.append({"off": rows[row]["off"], "row": row,
-                    "want": NAME_BY_COLOR[m.group(2)], "name": m.group(3)})
+                    "want": NAME_BY_COLOR[m.group(2)], "name": m.group(4),
+                    "shift": int(m.group(3)) if m.group(3) else None})
     return out
 
 
@@ -737,8 +779,8 @@ def report(best, ladder, a):
                 mode = "fault"
 
         if mode == "tick":
-            print("\ntick reading -- this driver holds the timer interrupt, so the seven rows "
-                  "below the clock are the program counter, not the fault:")
+            print("\ntick reading -- this driver holds the timer interrupt, so the borrowed rows "
+                  "are the program counter, not the fault:")
             print("%-11s %-7s %-12s %-9s %s" % ("offset", "colour", "state", "seen", "also"))
             bits = []
             arrived = None
@@ -759,7 +801,7 @@ def report(best, ladder, a):
                     if entry["want"] in ("cyan", "red"):
                         arrived = entry["want"]
                     elif entry["want"] == "yellow":
-                        bits.append(i)
+                        bits.append((i, entry))
                 print("%#011x %-7s %-12s %-9s %s / %s" %
                       (s["off"], entry["want"], state, seen, entry["name"], s["name"]))
             if arrived is None:
@@ -767,30 +809,48 @@ def report(best, ladder, a):
                       "interrupts masked, which is a driver stuck at high TPL rather than a "
                       "hardware bit that never sets")
             else:
-                # Which bit of the page number a row carries comes from its place in the
-                # driver's table, most significant first: row 9 is bit 4 and row 13 is bit 0.
-                # The weight has to be counted over the five rows the table defines, not over
-                # the rows that happen to be lit -- page 0b11001 lights rows 9, 10 and 13, and
-                # compacting the three lit ones would decode it as 0b111.
-                page_rows = sorted(i for i, s in tick_rows
-                                   if any(t["want"] == "yellow" for t in s["tick"]))
-                page = 0
-                for j, i in enumerate(page_rows):
-                    if i in bits:
-                        page |= 1 << (len(page_rows) - 1 - j)
+                # Round 19 gives every row the bit its own label names, so the value is the OR
+                # of the lit rows' shifts and nothing depends on how many rows happen to be
+                # lit.  Round 18 weighted by table position instead -- five rows, most
+                # significant first -- and a photograph from that round still has to read the
+                # way that driver painted it, so the positional rule survives as the fallback
+                # for a table that declares no shifts.
+                order = [i for i, s in tick_rows
+                         if any(t["want"] == "yellow" for t in s["tick"])]
+                shifted = any(entry["shift"] for _i, entry in bits)
+                if shifted:
+                    value = 0
+                    for _i, entry in bits:
+                        if entry["shift"]:
+                            value |= 1 << entry["shift"]
+                    page = value >> 12
+                else:
+                    weight = {i: 1 << (len(order) - 1 - k) for k, i in enumerate(order)}
+                    page = 0
+                    for i, _entry in bits:
+                        page |= weight.get(i, 0)
+                    value = page << 12
                 if arrived == "red":
                     print("\nthe tick's PC was outside the image the index names, so the loop "
                           "is in something else -- a library the core linked, or the core")
+                elif not bits:
+                    print("\nthe tick arrived inside that image but no address row is lit, and "
+                          "the marks above are lit, so the sample was taken while the rows were "
+                          "being erased rather than after one was painted -- photograph a boot "
+                          "that has been sitting for a few seconds and this resolves")
                 else:
-                    print("\nthe tick found the PC in page %d of that image, offset %#x..%#x "
-                          "of it (%d of the %d five-bit rows lit)" %
-                          (page, page * 0x1000, page * 0x1000 + 0xFFF,
-                           len(bits), len(page_rows)))
-                    # A page number is only worth what the table behind it is worth:
-                    # scripts/scan-clover-spins.py turns a blob's objdump listing into the
-                    # dead-loop and bit-poll sites grouped by exactly this number.
+                    print("\nthe tick found the PC at %#x..%#x of that image: page %d, %d of "
+                          "the %d address rows lit%s" %
+                          (value, value + (1 << (5 if shifted else 12)) - 1,
+                           page, len(bits), len(order),
+                           "" if shifted else "   (positional table: this driver samples the "
+                           "page only, so the bucket is not known)"))
+                    # A page number is only worth what the table behind it is worth, and an
+                    # offset is worth a line of source: scripts/scan-clover-spins.py turns a
+                    # blob's objdump listing into the dead-loop and bit-poll sites grouped by
+                    # exactly these numbers.
                     if a.blob_map:
-                        for line in blob_map(a.blob_map, page):
+                        for line in blob_map(a.blob_map, page, value if shifted else None):
                             print(line)
         else:
             print("\n%s" % ("exception reading:" if live else

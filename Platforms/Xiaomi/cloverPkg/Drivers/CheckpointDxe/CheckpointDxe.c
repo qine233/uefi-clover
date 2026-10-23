@@ -412,6 +412,12 @@ DrainAndReport (
 }
 
 STATIC
+BOOLEAN
+SlotIsLent (
+  IN UINTN  Index
+  );
+
+STATIC
 VOID
 EFIAPI
 SlotAppeared (
@@ -424,7 +430,13 @@ SlotAppeared (
   // Drain the registration so it cannot queue up behind this instance and repaint a
   // band that is already lit; painting is idempotent anyway.
   DrainAndReport (mSlots[Index].Guid, mRegistrations[Index]);
-  CloverCheckpointBar (mSlots[Index].Offset, mSlots[Index].Argb);
+
+  // The row may belong to a report layer (SlotIsLent), in which case the protocol still
+  // has to be drained -- that is what keeps later notifications flowing -- but the band
+  // is not ours to colour.
+  if (!SlotIsLent (Index)) {
+    CloverCheckpointBar (mSlots[Index].Offset, mSlots[Index].Argb);
+  }
 }
 
 /**
@@ -1017,11 +1029,11 @@ FaultSeen (
   blacks the whole borrowed band before it reports, so a tick that arrived first cannot be
   mistaken for a FAR range, and TickSeen checks mFaultPainted and stays out of the way.
 **/
-#define CLOVER_TICK_PAGE_FIRST  0
-#define CLOVER_TICK_PAGE_BITS   5
-#define CLOVER_TICK_OURS        5
-#define CLOVER_TICK_ARRIVED     6
-#define CLOVER_TICK_OUTSIDE     7
+#define CLOVER_TICK_FIRST_BIT  0
+#define CLOVER_TICK_BIT_ROWS   12           // entries 0..11 carry a Shift; the rest are marks
+#define CLOVER_TICK_OURS       12
+#define CLOVER_TICK_ARRIVED    13
+#define CLOVER_TICK_OUTSIDE    14
 
 // The four INTIDs ArmTimerDxe registers, in the order it registers them.  Copied rather
 // than read from its header because that header is private to its driver, and because the
@@ -1035,35 +1047,115 @@ FaultSeen (
 #define CLOVER_GICV5_TIMER_SEC_INTID    0x2000001d
 #define CLOVER_GICV5_TIMER_INTID        0x2000001e
 
+//
+// The tick's program counter, painted as the bit positions it actually has rather than as
+// a row order, because round 18's decode had to count yellow rows from their place in this
+// table and a row inserted in the middle would have silently re-weighted every other one.
+// `Shift` is the bit of (ELR - last image base) the row carries; 0 means the row is a mark
+// and not a bit.
+//
+// Round 19 adds the seven rows at the top.  Round 18 answered "which 4 KiB page", and the
+// answer was page 10 -- a page that holds two counter-free hardware ack polls, three
+// HALclkHuayraPLLTemplate ASSERT(0)s, six library asserts and one bare `b .`, so the page
+// could not separate an acknowledgement bit that never arrives from an assert that parked
+// the CPU in CpuDeadLoop.  Five more bits of the same address can: every site on that page
+// is at least 0x1C apart except `0xa348`/`0xa364`, and 32-byte buckets split those too.
+//
+// The rows come from slots 0..6 (FV2, FVB, the CPU, the vendor fan-in GUID, ArmGicDxe,
+// ArmTimerDxe, SmemDxe), which have lit on every photograph since round 14 and are the
+// cheapest thing on the panel to give up: the module the hang is in is named by the index
+// bands, not by them.  SlotIsLent() is what stops their notifications from painting a cyan
+// band over a bit.
+//
+#define CLOVER_TICK_SHIFT_MIN  5            // the finest bit any row carries
+
 STATIC CONST struct {
   UINTN    Row;
   UINT32   Argb;
+  UINTN    Shift;
   CHAR8    *Name;
 } mTickBits[] = {
-  {  9, CLOVER_COLOR_YELLOW, "tick PC page, bit 4 (the 64 KiB half of the image)" },
-  { 10, CLOVER_COLOR_YELLOW, "tick PC page, bit 3"                                },
-  { 11, CLOVER_COLOR_YELLOW, "tick PC page, bit 2"                                },
-  { 12, CLOVER_COLOR_YELLOW, "tick PC page, bit 1"                                },
-  { 13, CLOVER_COLOR_YELLOW, "tick PC page, bit 0"                                },
-  { 14, CLOVER_COLOR_WHITE,  "the timer's GIC source is ours"                     },
-  { 15, CLOVER_COLOR_CYAN,   "a tick arrived, with its PC inside that image"      },
-  { 15, CLOVER_COLOR_RED,    "a tick arrived, with its PC outside that image"     }
+  {  0, CLOVER_COLOR_YELLOW, 11, "tick PC, bit 11 (the page's upper half)"          },
+  {  1, CLOVER_COLOR_YELLOW, 10, "tick PC, bit 10"                                  },
+  {  2, CLOVER_COLOR_YELLOW,  9, "tick PC, bit 9"                                   },
+  {  3, CLOVER_COLOR_YELLOW,  8, "tick PC, bit 8"                                   },
+  {  4, CLOVER_COLOR_YELLOW,  7, "tick PC, bit 7"                                   },
+  {  5, CLOVER_COLOR_YELLOW,  6, "tick PC, bit 6"                                   },
+  {  6, CLOVER_COLOR_YELLOW,  5, "tick PC, bit 5 (a 32-byte bucket)"                },
+  {  9, CLOVER_COLOR_YELLOW, 16, "tick PC page, bit 4 (the 64 KiB half of the image)" },
+  { 10, CLOVER_COLOR_YELLOW, 15, "tick PC page, bit 3"                              },
+  { 11, CLOVER_COLOR_YELLOW, 14, "tick PC page, bit 2"                              },
+  { 12, CLOVER_COLOR_YELLOW, 13, "tick PC page, bit 1"                              },
+  { 13, CLOVER_COLOR_YELLOW, 12, "tick PC page, bit 0"                              },
+  { 14, CLOVER_COLOR_WHITE,   0, "the timer's GIC source is ours"                   },
+  { 15, CLOVER_COLOR_CYAN,    0, "a tick arrived, with its PC inside that image"    },
+  { 15, CLOVER_COLOR_RED,     0, "a tick arrived, with its PC outside that image"   }
 };
 
 STATIC BOOLEAN                             mTickInstalled;
 STATIC BOOLEAN                             mTickArrived;
 STATIC BOOLEAN                             mTickOutsideShown;
-STATIC UINTN                               mTickPageShown;
+STATIC UINTN                               mTickBucketShown;
+STATIC UINT32                              mTickShownMask;
 STATIC EFI_HARDWARE_INTERRUPT_PROTOCOL     *mInterrupt;
 STATIC UINT64                              mTickTicks;
 STATIC EFI_EVENT                           mTickEvent;
 STATIC VOID                                *mTickRegistration;
 
 /**
-  Paint one tick row.  The page bits are repainted only when the page changes, so a stable
-  spin writes each band once rather than a hundred and twenty-eight kilobytes a millisecond
-  for as long as the tablet is on -- and a value that does move across samples is itself
-  worth seeing, which a latch would hide.
+  Whether a slot row has been lent to one of the report layers.
+
+  Rows 0..6 are tick bits from round 19 and rows 9..15 are the fault and tick rows, so a
+  protocol appearing in one of them would otherwise recolour a band a report owns.  The
+  notification itself is never skipped -- the registration has to be drained or later
+  instances of that protocol go unseen -- only its paint is.
+
+  A scan of the two tables rather than a flag in mSlots, because the tables are the things
+  that borrow and they have to stay the single source of truth for who owns a row.
+**/
+STATIC
+BOOLEAN
+SlotIsLent (
+  IN UINTN  Index
+  )
+{
+  UINTN  Entry;
+
+  for (Entry = 0; Entry < ARRAY_SIZE (mFaultBits); Entry++) {
+    if (mFaultBits[Entry].Row == Index) {
+      return TRUE;
+    }
+  }
+
+  for (Entry = 0; Entry < ARRAY_SIZE (mTickBits); Entry++) {
+    if (mTickBits[Entry].Row == Index) {
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+  Paint one tick row in a given colour.
+
+  Black is as important as the report colours: the sampled value is repainted whenever the
+  PC's 32-byte bucket changes, and a bit that an earlier sample set and this one clears has
+  to be erased.  Without the erase the bands end up the union of every address the loop
+  passed through, which on a page holding twelve candidates is not a reading at all.
+**/
+STATIC
+VOID
+PaintTickAs (
+  IN UINTN   Index,
+  IN UINT32  Argb
+  )
+{
+  CloverCheckpointBar (mSlots[mTickBits[Index].Row].Offset, Argb);
+}
+
+/**
+  Paint one tick row in the colour its table entry names.
 **/
 STATIC
 VOID
@@ -1071,7 +1163,7 @@ PaintTick (
   IN UINTN  Index
   )
 {
-  CloverCheckpointBar (mSlots[mTickBits[Index].Row].Offset, mTickBits[Index].Argb);
+  PaintTickAs (Index, mTickBits[Index].Argb);
 }
 
 /**
@@ -1095,8 +1187,9 @@ TickSeen (
 {
   EFI_SYSTEM_CONTEXT_AARCH64  *Context;
   UINT64                      Elr;
-  UINTN                       Page;
-  UINTN                       Bit;
+  UINTN                       Delta;
+  UINTN                       Bucket;
+  UINTN                       Entry;
 
   // End of interrupt first, the way ArmTimerDxe does it, so a repaint of a 128 KiB band
   // cannot make the next tick be missed, and the timer is re-armed whether or not this
@@ -1139,15 +1232,34 @@ TickSeen (
     PaintTick (CLOVER_TICK_ARRIVED);
   }
 
-  Page = (UINTN)((Elr - mLastImageBase) >> 12);
-  if (Page == mTickPageShown) {
+  // Last writer wins, which is what turns a single sample of a long hang into the answer.
+  // The tick also fires during ordinary dispatch, so the value that stops changing is the
+  // one the loop is parked at.  Round 18 latched on the 4 KiB page and that was coarse
+  // enough to leave twelve candidates inside one reading; this latches on 32 bytes, which
+  // splits every site on ClockDxe's page 10 -- the two ack polls at 0xa784 and 0xab14, the
+  // three Huayra PLL ASSERT(0)s, and the bare `b .` at 0xac38 -- from each other.
+  Delta  = (UINTN)(Elr - mLastImageBase);
+  Bucket = Delta >> CLOVER_TICK_SHIFT_MIN;
+  if (Bucket == mTickBucketShown) {
     return;
   }
 
-  mTickPageShown = Page;
-  for (Bit = 0; Bit < CLOVER_TICK_PAGE_BITS; Bit++) {
-    if ((Page & (UINTN)(1u << (CLOVER_TICK_PAGE_BITS - 1 - Bit))) != 0) {
-      PaintTick (CLOVER_TICK_PAGE_FIRST + Bit);
+  mTickBucketShown = Bucket;
+
+  // Erase the bits the previous sample set before painting this one, so the bands are the
+  // newest address and not the union of everything the loop has walked through.
+  for (Entry = CLOVER_TICK_FIRST_BIT; Entry < CLOVER_TICK_BIT_ROWS; Entry++) {
+    if (((mTickShownMask >> Entry) & 1) != 0) {
+      PaintTickAs (Entry, CLOVER_COLOR_BLACK);
+    }
+  }
+
+  mTickShownMask = 0;
+
+  for (Entry = CLOVER_TICK_FIRST_BIT; Entry < CLOVER_TICK_BIT_ROWS; Entry++) {
+    if (((Delta >> mTickBits[Entry].Shift) & 1) != 0) {
+      PaintTick (Entry);
+      mTickShownMask |= (UINT32)(1u << Entry);
     }
   }
 }
@@ -1336,8 +1448,10 @@ CheckpointDxeEntry (
       continue;
     }
 
-    // The round-13 fix: ask the registration what it can already see.
-    if (DrainAndReport (mSlots[Index].Guid, mRegistrations[Index])) {
+    // The round-13 fix: ask the registration what it can already see.  A row that a report
+    // layer borrowed is still drained -- the drain is what makes later instances visible --
+    // but the band belongs to the report, not to the protocol.
+    if (DrainAndReport (mSlots[Index].Guid, mRegistrations[Index]) && !SlotIsLent (Index)) {
       CloverCheckpointBar (mSlots[Index].Offset, mSlots[Index].Argb);
     }
   }

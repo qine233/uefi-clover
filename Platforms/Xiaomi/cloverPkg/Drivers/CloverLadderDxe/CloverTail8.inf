@@ -1,7 +1,7 @@
 ##
 #  clover: tail band 8 -- black band on yellow, below RngDxe.
 #
-#  An eighth band means TzDxe, LimitsDxe, HashDxe and RngDxe all returned.
+#  An eighth band means LimitsDxe, HashDxe and RngDxe all returned.
 #  See CloverLadderDxe.c for the reading table.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent

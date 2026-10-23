@@ -857,6 +857,21 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
                                 + " but DXE.inc does not contain it, so it never "
                                 "reaches the firmware volume")
 
+            # An Apriori entry bypasses the depex entirely: DxeCore queues every
+            # Apriori GUID as schedulable without reading it, so a driver there
+            # runs even when nothing installs what it depends on.  TzDxeLA names
+            # an SCM protocol no module here provides and hangs the dispatcher;
+            # upstream lavenderPkg leaves it out of the volume for the same
+            # reason, so it must stay commented in both files.
+            for name, path in (("APRIORI.inc", apriori), ("DXE.inc", dxe)):
+                live = [line for line in path.read_text().splitlines()
+                        if "TzDxeLA.inf" in line
+                        and not line.lstrip().startswith("#")]
+                if live:
+                    problems.append(f"{name} ships TzDxeLA: its SCM dependency is "
+                                    "missing here and an APRIORI entry dispatches "
+                                    "without checking the depex")
+
     if kernel.get("append_dtb") and not (REPO / "Resources" / "DTBs" / "clover.dtb").is_file():
         # Only the standalone `build_uefi.py -d clover` path reads this; the UniXNU
         # path never calls build_uefi.py and packs its own Apple device tree.  A

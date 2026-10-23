@@ -14,7 +14,12 @@
   INF MdeModulePkg/Core/RuntimeDxe/RuntimeDxe.inf
   INF MdeModulePkg/Universal/SecurityStubDxe/SecurityStubDxe.inf
 
-  INF Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
+  # TzDxeLA is deliberately absent, as it is in upstream lavenderPkg: the blob
+  # waits for an SCM protocol (4E5B2102-5996-D264-118E-3900A0C96972) that no
+  # module in this volume installs, and an APRIORI entry forces dispatch
+  # regardless of depex, so shipping it hangs the dispatcher. The APRIORI line
+  # stays commented out in tandem; see the tail comment there.
+  #INF Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
 
   INF MdeModulePkg/Universal/WatchdogTimerDxe/WatchdogTimer.inf
   INF MdeModulePkg/Universal/CapsuleRuntimeDxe/CapsuleRuntimeDxe.inf

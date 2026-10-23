@@ -126,7 +126,7 @@ UniXNU 菜单会盖掉绿色。于是：
 | 黄 + 1 条 | `BdsDxe` 返回了，卡在 `TLMM` 到 `UsbfnDwc3` 这一段厂商驱动 |
 | 黄 + 2 条 | 卡在 `UsbBus`/`UsbKb`/`UsbMassStorage` |
 | 黄 + 3 条 | 卡在 `UsbMsd`/`UsbDevice`/`UsbConfig`/`Buttons`/`Tsens` |
-| 黄 + 4 条 | 卡在 `TzDxe` 自己 |
+| 黄 + 4 条 | 本不该出现：`TzDxeLA` 已从卷里摘除，Tail4 与 Tail5 之间没有模块 |
 | 黄 + 5 条 | 卡在 `LimitsDxe` 自己 |
 | 黄 + 6 条 | 卡在 `HashDxe` 自己 |
 | 黄 + 7 条 | 卡在 `RngDxe` 自己 |

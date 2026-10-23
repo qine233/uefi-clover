@@ -1,8 +1,9 @@
 ##
-#  clover: tail band 5 -- black band on yellow, below TzDxe.
+#  clover: tail band 5 -- black band on yellow, below the removed TzDxe slot.
 #
-#  A fifth band means the Qualcomm TrustZone driver returned, so the stop is in
-#  LimitsDxe, HashDxe or RngDxe.  See CloverLadderDxe.c for the reading table.
+#  A fifth band means dispatch reached LimitsDxe, so the stop is in LimitsDxe,
+#  HashDxe or RngDxe.  TzDxeLA itself is not in the volume; the reference
+#  lavenderPkg leaves it out too.  See CloverLadderDxe.c for the reading table.
 #
 #  SPDX-License-Identifier: BSD-2-Clause-Patent
 ##

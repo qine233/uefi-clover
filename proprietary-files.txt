@@ -175,9 +175,6 @@ R Binaries/clover/QcomPkg/Drivers/PlatformInfoDxe/PlatformInfoDxe.depex
 R Binaries/clover/QcomPkg/Drivers/SmemDxe/SmemDxe.inf
 R Binaries/clover/QcomPkg/Drivers/SmemDxe/SmemDxe.efi
 R Binaries/clover/QcomPkg/Drivers/SmemDxe/SmemDxe.depex
-R Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
-R Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.efi
-R Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.depex
 R Binaries/clover/QcomPkg/Drivers/SPMIDxe/SPMIDxe.inf
 R Binaries/clover/QcomPkg/Drivers/SPMIDxe/SPMIDxe.efi
 R Binaries/clover/QcomPkg/Drivers/SPMIDxe/SPMIDxe.depex

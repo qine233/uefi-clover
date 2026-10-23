@@ -116,7 +116,11 @@ APRIORI DXE {
   # the MDSS pipeline and the panel that ABL handed over, which is the opposite
   # of what a framebuffer owner wants.
 
-  INF Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
+  # TzDxeLA is not started: no module in this volume installs the SCM protocol
+  # its depex names, and the APRIORI list dispatches unconditionally. Upstream
+  # lavenderPkg leaves the same line commented out. Its would-be boundary is
+  # Tail5, which now reports reaching LimitsDxe.
+  #INF Binaries/clover/QcomPkg/Drivers/TzDxe/TzDxeLA.inf
   INF cloverPkg/Drivers/CloverLadderDxe/CloverTail5.inf
   INF Binaries/clover/QcomPkg/Drivers/LimitsDxe/LimitsDxe.inf
   INF cloverPkg/Drivers/CloverLadderDxe/CloverTail6.inf

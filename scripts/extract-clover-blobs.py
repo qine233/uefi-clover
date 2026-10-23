@@ -183,8 +183,10 @@ UPSTREAM = [
             "DXE_DEPEX|TLMMDxe.depex;PE32|TLMMDxe.efi"),
     ("F09AD92E-485C-9CDB-3E05-3385C38F94CC", "QcomPkg/Drivers/TsensDxe/TsensDxe.inf", "TsensDxe", "DXE_DRIVER", "EfiEntry",
             "DXE_DEPEX|TsensDxe.depex;PE32|TsensDxe.efi"),
-    ("6925FAD3-E243-4B69-AD61-3F978C8ABC60", "QcomPkg/Drivers/TzDxe/TzDxeLA.inf", "TzDxe", "DXE_DRIVER", "EfiEntry",
-            "DXE_DEPEX|TzDxeLA.depex;PE32|TzDxeLA.efi"),
+    # TzDxeLA (6925FAD3-E243-4B69-AD61-3F978C8ABC60) is intentionally not
+    # extracted: nothing in the volume provides the SCM protocol its depex
+    # names, and an APRIORI entry dispatches without consulting the depex, so
+    # shipping it hangs the dispatcher. Upstream lavenderPkg omits it too.
     ("0D35CD8E-97EA-4F9A-96AF-0F0D89F76567", "QcomPkg/Drivers/UFSDxe/UFSDxe.inf", "UFSDxe", "DXE_DRIVER", "EfiEntry",
             "DXE_DEPEX|UFSDxe.depex;PE32|UFSDxe.efi"),
     ("E43128A8-8692-42B6-8AFA-676158578D18", "QcomPkg/Drivers/ULogDxe/ULogDxe.inf", "ULogDxe", "DXE_DRIVER", "EfiEntry",

@@ -694,176 +694,50 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
                         f"both boot and recovery on this unit carry header version "
                         f"{BOOT_HEADER_VERSION}")
     # BootShim.S emits an arm64 Linux image header between its _Head branch and
-    # _Start: text_offset = FD_BASE at 8, image_size = FD_SIZE at 16, "ARM\x64" at 56.
-    # mkbootimg never writes those -- its boot header is the image's first page, outside
-    # the kernel blob -- so this flag is Mu's way of showing the loader those fields,
-    # and text_offset = 0x9fc00000 lies about the entry offset either way.
-    # Round 6 turned it off and the tablet fell back to fastboot, which read like the
-    # header being what makes ABL load us.  Round 6 was also kernel_compression = "none",
-    # and rounds 5 and 8 -- "none", header on -- did the same, so the difference measured
-    # the encoding.  Upstream's value is kept, and the claim about it stays a warning
-    # until gzip-plus-no-header is actually put on the device.
+    # _Start: text_offset = FD_BASE at 8, image_size at 16, "ARM\x64" at 56.
+    # mkbootimg never writes those -- its boot header is the image's first page,
+    # outside the kernel blob -- so this flag is Mu's way of showing the loader
+    # those fields, and text_offset = 0x9fc00000 lies about the entry offset either
+    # way.  Gzip plus the header is the combination that reaches BootShim on this
+    # unit; gzip without it has never been measured, so turning it off is a warning.
     if not shim.get("requires_kernel_header"):
         warnings.append("clover.toml [boot_shim] requires_kernel_header is off: that is "
                         "the one combination never tested with kernel_compression = "
-                        "\"gzip\" (round 6 was a \"none\" build), so its behaviour on this "
-                        "unit is a guess")
-    # This overlay now ships its own copy of upstream BootShim/BootShim.S with a
-    # liveness probe: it paints ABL's already-live splash framebuffer before it
-    # relocates the firmware volume, because a logo cannot distinguish "our code ran
-    # and drew nothing" from "the loader never jumped to us".  A probe aimed at the
-    # wrong window is worse than no probe -- it either never shows or scribbles over
-    # memory the running loader still uses -- so bind it to the same map row every
-    # other board number in this file is checked against.
+                        "\"gzip\", so its behaviour on this unit is a guess")
+    # The overlay replaces BootShim.S for one reason: Image Size has to describe the
+    # shim as well as the volume, because the UniXNU bootimg step checks the header
+    # against the bytes it puts in the kernel field.  It must not paint the panel --
+    # the framebuffer belongs to the firmware's GraphicsOutput.
     probe = REPO / "BootShim" / "BootShim.S"
     if probe.is_file():
         text = probe.read_text()
-        mode = re.search(r"#define\s+PROBE_MODE\s+PROBE_(OFF|HANG|PAINT)", text)
-        if mode is None:
-            problems.append("BootShim/BootShim.S has no '#define PROBE_MODE PROBE_*' line, so "
-                            "the checker cannot say what the probe in the shipped image does")
-        elif mode.group(1) == "PAINT":
-            got = re.search(r"\.equ\s+SPLASH_BASE,\s*(0x[0-9a-fA-F]+)", text)
-            fill = re.search(r"\.equ\s+SPLASH_FILL,\s*(0x[0-9a-fA-F]+)", text)
-            row = map_rows.get("Display Reserved") if map_rows else None
-            if got is None or fill is None:
-                problems.append("BootShim probe is PROBE_PAINT but no .equ SPLASH_BASE/"
-                                "SPLASH_FILL is in scope for the checker to bind")
-            elif row is None:
-                warnings.append("BootShim probe is PROBE_PAINT but MemoryMapLib has no "
-                                "'Display Reserved' row to validate it against")
-            else:
-                base, span = int(got.group(1), 0), int(fill.group(1), 0)
-                if base != row[0]:
-                    problems.append(f"BootShim/BootShim.S paints {base:#x}, but MemoryMapLib "
-                                    f"starts 'Display Reserved' at {row[0]:#x}")
-                elif base + span > row[0] + row[1]:
-                    problems.append(f"BootShim/BootShim.S paints {span:#x} bytes from "
-                                    f"{base:#x}, past the end of 'Display Reserved' at "
-                                    f"{row[0] + row[1]:#x}")
-                else:
-                    note("*", f"BootShim splash probe covers {base:#x}+{span:#x}, inside "
-                              f"'Display Reserved' {row[0]:#x}+{row[1]:#x}")
-        elif mode.group(1) == "HANG":
-            note("*", "BootShim probe is PROBE_HANG: the payload branches to itself at entry, "
-                      "so the round is read from how long fastboot stays away, not from the "
-                      "screen (seconds = ABL never entered; never = it did)")
+        if "SPLASH_BASE" in text or "SPLASH_FILL" in text:
+            problems.append("BootShim/BootShim.S still paints the splash window; the "
+                            "framebuffer belongs to CloverGopDxe and GraphicsConsoleDxe")
+        elif "FD_SIZE + (_Payload - _Head)" not in text:
+            problems.append("BootShim/BootShim.S does not write an Image Size that covers "
+                            "the shim and the firmware volume it carries")
         else:
-            warnings.append("BootShim/BootShim.S is copied into the checkout with "
-                            "PROBE_MODE = PROBE_OFF, i.e. it only reverts upstream's file; "
-                            "delete it and its COPIED entry unless that is intended")
+            note("*", "BootShim writes text_offset = FD_BASE and an Image Size over the "
+                      "shim plus the volume, and paints nothing")
 
-    # The second probe layer: bars inside the firmware itself, so one boot reports
-    # how far it got instead of only that it started.  Include/Checkpoint.h holds the
-    # splash base and the bar size; the stage files pass an offset and a colour.  Two
-    # things are worth failing on: a base that is not the row the map reserves (the
-    # bars would land on the DXE heap, or on nothing), and a bar outside the window
-    # BootShim filled, which would make the reading depend on where ABL's logo happened
-    # to be rather than on the code that ran.
-    ladder = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "Include" / "Checkpoint.h"
-    if ladder.is_file():
-        head = ladder.read_text()
-        cbase = re.search(r"#define\s+CLOVER_SPLASH_BASE\s+(0x[0-9a-fA-F]+)", head)
-        csize = re.search(r"#define\s+CLOVER_BAR_SIZE\s+(0x[0-9a-fA-F]+)", head)
-        stages = {}
-        for path in sorted((REPO / "Platforms" / "Xiaomi" / "cloverPkg").rglob("*")):
-            if path.suffix not in {".c", ".h"} or path == ladder:
-                continue
-            text = path.read_text(errors="ignore")
-            # A call site names its own offset; CheckpointDxe's protocol table does
-            # not, it stores the offset in a row and passes it later, so scan for
-            # both shapes. A table row the checker cannot see is a band nobody
-            # validated.  The third shape is the index bit table, whose rows carry
-            # an offset and a bit number rather than a GUID, and the fourth is the
-            # mark table, whose rows carry an offset, a colour and a sentence.
-            found = re.findall(r"CloverCheckpointBar\s*\(\s*(0x[0-9a-fA-F]+)", text)
-            found += re.findall(r"\{\s*&\w+,\s*(0x[0-9a-fA-F]+)\s*,", text)
-            found += re.findall(r"\{\s*(0x[0-9a-fA-F]+)\s*,\s*\d+\s*\}", text)
-            found += re.findall(r"\{\s*(0x[0-9a-fA-F]+)\s*,\s*CLOVER_COLOR_\w+\s*,", text)
-            for offset in found:
-                stages.setdefault(int(offset, 0), []).append(path.name)
-        row = map_rows.get("Display Reserved") if map_rows else None
-        if cbase is None or csize is None:
-            problems.append("Include/Checkpoint.h must keep its #define CLOVER_SPLASH_BASE "
-                            "and CLOVER_BAR_SIZE on one line each; the checker reads them "
-                            "to prove the bars are inside the panel window")
-        elif row is None:
-            warnings.append("checkpoint bars are in the tree but MemoryMapLib has no "
-                            "'Display Reserved' row to validate them against")
-        else:
-            base, size = int(cbase.group(1), 0), int(csize.group(1), 0)
-            if base != row[0]:
-                problems.append(f"Include/Checkpoint.h paints at {base:#x}, but MemoryMapLib "
-                                f"starts 'Display Reserved' at {row[0]:#x}")
-            elif not stages:
-                problems.append("Include/Checkpoint.h is in the tree but no "
-                                "CloverCheckpointBar call site exists, so the shipped image "
-                                "has no checkpoint bars to read")
-            else:
-                filled = 0x00800000
-                if probe.is_file():
-                    match = re.search(r"\.equ\s+SPLASH_FILL,\s*(0x[0-9a-fA-F]+)",
-                                      probe.read_text())
-                    if match:
-                        filled = int(match.group(1), 0)
-                offsets = sorted(stages)
-                outside = [f"{offset:#x} in {', '.join(stages[offset])}"
-                           for offset in offsets if offset + size > row[1]]
-                unfilled = [f"{offset:#x} in {', '.join(stages[offset])}"
-                            for offset in offsets if offset + size > filled]
-                # Two bands within one bar length of each other paint over one
-                # another, and the deeper stage stops meaning anything: this is the
-                # one way the ladder can silently lose its reading.
-                clash = [f"{offsets[i]:#x} and {offsets[i + 1]:#x}"
-                         for i in range(len(offsets) - 1)
-                         if offsets[i + 1] - offsets[i] < size]
-                dupes = [f"{offset:#x} by {', '.join(names)}"
-                         for offset, names in sorted(stages.items()) if len(names) > 1]
-                if outside:
-                    problems.append("checkpoint bar runs past 'Display Reserved': "
-                                    + ", ".join(outside))
-                elif unfilled:
-                    problems.append(f"checkpoint bar sits outside the {filled:#x} BootShim "
-                                    "filled, so its visibility depends on ABL's logo and not "
-                                    "on the code: " + ", ".join(unfilled))
-                elif dupes:
-                    problems.append("two stages paint the same slot, so one of them will "
-                                    "never be visible: " + ", ".join(dupes))
-                elif clash:
-                    problems.append("checkpoint bars overlap (" + ", ".join(clash)
-                                    + f"), closer than the {size:#x} bar size; the screen "
-                                    "would show a merged band and the order could not be read")
-                else:
-                    pitch = (min(offsets[i + 1] - offsets[i] for i in range(len(offsets) - 1))
-                             if len(offsets) > 1 else 0)
-                    note("*", f"checkpoint ladder has {len(offsets)} bars at "
-                              + ", ".join(f"{offset:#x}" for offset in offsets)
-                              + f", each {size:#x} bytes, {pitch:#x} apart at the tightest, "
-                              "all inside the BootShim fill")
-        apriori = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "Include" / "APRIORI.inc"
-        dxe = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "Include" / "DXE.inc"
-        if stages and apriori.is_file() and dxe.is_file():
-            for name, text in (("APRIORI.inc", apriori.read_text()),
-                               ("DXE.inc", dxe.read_text())):
-                if "CheckpointDxe.inf" not in text:
-                    problems.append(f"{name} does not list CheckpointDxe.inf, so the "
-                                    "checkpoint driver is not in the firmware volume and "
-                                    "its bars can never appear")
-        # Measured, the hard way: an INF that only the FDF lists is not built at all,
-        # and the build stops with "Module ... NOT found in DSC file; Is it really a
-        # binary module?".  The vendor blobs escape this because QcomPkg.dsc.inc
-        # declares them; a module of our own has to appear in clover.dsc too.
-        dsc = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "clover.dsc"
-        if dsc.is_file():
-            listed = set()
-            for text in (apriori, dxe):
-                if text.is_file():
-                    listed |= set(re.findall(r"INF\s+(cloverPkg/\S+\.inf)", text.read_text()))
-            absent = sorted(p for p in listed if p not in dsc.read_text())
-            if absent:
-                problems.append("clover.dsc [Components] does not declare "
-                                + ", ".join(absent)
-                                + "; the FDF alone does not build a module")
+    # Measured, the hard way: an INF that only the FDF lists is not built at all, and
+    # the build stops with "Module ... NOT found in DSC file; Is it really a binary
+    # module?".  The vendor blobs escape this because QcomPkg.dsc.inc declares them;
+    # a module of our own has to appear in clover.dsc too.
+    dsc = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "clover.dsc"
+    if dsc.is_file():
+        listed = set()
+        for name in ("APRIORI.inc", "DXE.inc"):
+            path = REPO / "Platforms" / "Xiaomi" / "cloverPkg" / "Include" / name
+            if path.is_file():
+                listed |= set(re.findall(r"INF\s+(cloverPkg/\S+\.inf)", path.read_text()))
+        absent = sorted(p for p in listed if p not in dsc.read_text())
+        if absent:
+            problems.append("clover.dsc [Components] does not declare "
+                            + ", ".join(absent)
+                            + "; the FDF alone does not build a module")
+
     if kernel.get("append_dtb") and not (REPO / "Resources" / "DTBs" / "clover.dtb").is_file():
         # Only the standalone `build_uefi.py -d clover` path reads this; the UniXNU
         # path never calls build_uefi.py and packs its own Apple device tree.  A

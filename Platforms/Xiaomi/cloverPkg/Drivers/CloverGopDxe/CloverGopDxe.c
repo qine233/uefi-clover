@@ -3,14 +3,13 @@
 
   This unit's DisplayDxe is a vendor blob. It brings MDSS, the nt51021 panel and
   the pm660l backlight up and paints into the "Display Reserved" window at
-  0x9D400000, which is what the checkpoint ladder has been writing to since round
-  9.  It is also the only candidate producer of EFI_GRAPHICS_OUTPUT_PROTOCOL in
-  this volume: SimpleFbDxe, the stock driver that would publish one over the
-  inherited framebuffer, is compiled out because clover picks the vendor display
-  driver (USE_CUSTOM_DISPLAY_DRIVER = 1).  The vendor blob does reference the
-  protocol GUID, but no GOP is there when it matters: round 27's UnableToBoot
-  drew neither BootLogo.bmp nor NoBootOS.bmp, which DisplayBootGraphic can only
-  do through a GOP.
+  0x9D400000, which is the buffer ABL hands over.  It is also the only candidate
+  producer of EFI_GRAPHICS_OUTPUT_PROTOCOL in this volume: SimpleFbDxe, the stock
+  driver that would publish one over the inherited framebuffer, is compiled out
+  because clover picks the vendor display driver (USE_CUSTOM_DISPLAY_DRIVER = 1).
+  The vendor blob does reference the protocol GUID, but no GOP is there when it
+  matters: BDS's boot graphic (BootLogo.bmp / NoBootOS.bmp) is drawn only through
+  a GOP, and none appears.
 
   That one missing protocol is why no menu has ever reached this panel. A
   consumer has nothing to draw with: GraphicsConsoleDxe's depex is never
@@ -22,11 +21,11 @@
   So publish the protocol here instead of waiting for the blob to. The buffer,
   geometry and pixel order are not guesses: clover.dsc already declares
   1200x1920 (PcdFrameBufferWidth/Height) from the panel's own device tree, the
-  splash window is the one uefiplat.cfg reserves, and round 9 established the
-  memory order -- 0xFF0000FF displays blue, so byte 0 is blue and the format is
-  PixelBlueGreenRedReserved8BitPerColor. One mode, no mode changes: the panel
-  is not switchable, and a consumer that asks for another mode is asking for
-  something this board cannot do.
+  splash window is the one uefiplat.cfg reserves, and the memory order was read
+  off the unit's own firmware -- 0xFF0000FF displays blue, so byte 0 is blue and
+  the format is PixelBlueGreenRedReserved8BitPerColor. One mode, no mode changes:
+  the panel is not switchable, and a consumer that asks for another mode is
+  asking for something this board cannot do.
 
   Blt is the whole protocol for a framebuffer like this. Implemented: video
   fill, buffer to video, video to buffer and video to video. UniXNU only uses

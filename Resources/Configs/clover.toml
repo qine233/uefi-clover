@@ -10,21 +10,11 @@
 # Boot Shim Configs
 #
 # true, as every upstream Mu device sets it.  BootShim.S emits an arm64 Linux image
-# header when this is on: .quad FD_BASE at offset 8 (text_offset), .quad FD_SIZE at 16
-# (image_size), "ARM\x64" at 56.  text_offset = 0x9fc00000 is not a legal value per the
-# arm64 boot protocol, which wants a small page-aligned offset, so a loader that parses
-# these fields is being lied to -- and this board tolerates the lie: round 9 (gzip + this
-# header) entered BootShim and the splash went blue.
-# mkbootimg never writes this header (its own boot header is the image's first page,
-# outside the kernel blob), so the flag is purely Mu's way of showing ABL the fields.
-#
-# Recorded honestly rather than settled: round 6 turned this off and the tablet then
-# flashed the logo and fell back to fastboot, which looked like the header being what
-# makes ABL load us.  Round 6 was kernel_compression = "none", so its kernel blob began
-# with ARM code rather than 1f 8b, and rounds 5 and 8 -- also "none", also header-on --
-# behaved the same way round 6 did.  The encoding moved, not the header.  gzip with the
-# header off has never been tested, and the checker's rule against it is currently a
-# guard on an unmeasured combination rather than a measurement.
+# header when this is on: .quad FD_BASE at offset 8 (text_offset), an image size at
+# 16, "ARM\x64" at 56.  text_offset = 0x9fc00000 is not a legal value per the arm64
+# boot protocol, but this ABL loads such images anyway.  mkbootimg never writes this
+# header -- its own boot header is the image's first page, outside the kernel blob --
+# so the flag is purely Mu's way of showing ABL the fields.
 #
 [boot_shim]
 requires_kernel_header = true
@@ -48,19 +38,8 @@ size = 0x300000
 # "gzip", matching upstream and matching this tablet.  Measured on the device's own
 # dumps (facts/<serial>-<stamp>/img/): both unixnu-boot.img and unixnu-recovery.img
 # begin their kernel section with 1f 8b, a bare gzip stream, with the device trees
-# appended after it.  So this ABL gunzips boot images as a matter of course -- it is
-# doing exactly that to keep Android running right now.
-#
-# This reverses v0.2.10, whose rationale was a false premise I wrote down two blocks
-# below the evidence that disproves it: I claimed the unit's kernels are arm64
-# Image.gz-with-stub (executable code that unpacks itself) and that a 2018 header-v0
-# ABL therefore never needed gunzip.  They are plain Image.gz, and the payload has to
-# arrive as a gzip stream for the loader to decompress it at all.  With
-# kernel_compression = "none" the loader is handed raw arm64 code where it expects a
-# gzip stream, and the observed behaviour changed accordingly -- the splash flashed
-# and fell back to fastboot instead of staying on screen, which is now the reading of
-# rounds 6, 7 and 8.  BootShim itself does no decompression; the gunzip has to be
-# ABL's, and on this unit it is.
+# appended after it.  BootShim itself does no decompression, so the gunzip is ABL's,
+# and on this unit it is -- it does exactly that to keep Android running.
 #
 [boot_image_kernel]
 kernel_compression = "gzip"

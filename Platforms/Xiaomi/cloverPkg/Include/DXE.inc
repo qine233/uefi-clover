@@ -50,16 +50,7 @@
   INF MdeModulePkg/Universal/Disk/UnicodeCollation/EnglishDxe/EnglishDxe.inf
 
   INF Binaries/clover/QcomPkg/Drivers/DALSYSDxe/DALSYSDxe.inf
-  #
-  # Round 17: back in, and the round-16 experiment is closed.  With this file out of the
-  # volume the queue ran four rows further than it ever had and then stopped inside
-  # SdccDxe, which is FVMAIN file 42 on that build -- the eMMC host driver does not
-  # survive a boot with no clock producer, so removing the driver cannot teach this
-  # panel anything more.  Round 17 asks a different question of the same hang: what the
-  # CPU was told when it stopped, which CheckpointDxe now paints out of the exception
-  # context.  Restoring the file also restores the numbering, so a round-17 photograph
-  # is decoded against a fv-order.py re-exported with ClockDxe present.
-  #
+  # The clock producer SdccDxe needs; see the APRIORI.inc entry.
   INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/HWIODxe/HWIODxe.inf
   INF Binaries/clover/QcomPkg/Drivers/I2CDxe/I2CDxe.inf
@@ -123,11 +114,7 @@
 
   #
   # The GOP over the panel buffer DisplayDxe paints but does not publish
-  # (Drivers/CloverGopDxe).  Appended after the UniXNU trio rather than inserted
-  # beside the display drivers on purpose, so FVMAIN indices 1..67 -- every file
-  # any past photograph was decoded against -- keep their meaning.  The raw and
-  # config files that the FDF places after DXE.inc do shift by one; fv-order.txt
-  # is re-exported for that.  APRIORI.inc decides when this module is
-  # dispatched, and that is right before GraphicsConsoleDxe.
+  # (Drivers/CloverGopDxe).  APRIORI.inc dispatches it right before
+  # GraphicsConsoleDxe, whose depex is otherwise never satisfied on this board.
   #
   INF cloverPkg/Drivers/CloverGopDxe/CloverGopDxe.inf

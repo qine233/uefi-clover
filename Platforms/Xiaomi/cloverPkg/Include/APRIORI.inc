@@ -41,19 +41,9 @@ APRIORI DXE {
   INF Binaries/clover/QcomPkg/Drivers/ULogDxe/ULogDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/NpaDxe/NpaDxe.inf
   #
-  # Round 17: ClockDxe is back in, and round 16 is what decided it.  Taking it out of
-  # this list did not starve anything -- apriori entries are queued by line position with
-  # no depex evaluation, so SdccDxe, DisplayDxe, I2CDxe and SPIDxe all still got started
-  # -- and the panel then read FVMAIN file 42, SdccDxe, with every row from the clock down
-  # still dark.  The eMMC host driver dies without a clock producer, which is the answer
-  # the removal was built to get and the last thing it can say.
-  #
-  # The queue stops in the same place either way, so round 17 stops asking where and asks
-  # what the CPU was told: CheckpointDxe registers a synchronous-exception callback and
-  # paints whether a fault happened at all, which range FAR landed in, whether ESR calls
-  # it a data abort and a translation fault, and whether the faulting address is inside
-  # the image the core had just loaded.  A screen with those rows dark and the driver
-  # named is a spin; a screen with them lit is a fault, and says what kind.
+  # ClockDxe is the clock producer SdccDxe waits on.  Without it the eMMC host driver
+  # does not get past its first register access, and the block devices the ESP and
+  # userdata live on never appear.
   #
   INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
 

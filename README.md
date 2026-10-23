@@ -1,101 +1,114 @@
 # uefi-clover
 
-Mu-Silicium device package for the **Xiaomi Mi Pad 4 8" LTE** (`clover`,
-`xiaomi,clover-lte`, Qualcomm **SDM660**). Together with the sibling board
-repository `UniXNU-clover`, which builds XNU and the boot image, it is the UEFI
-half of a UniXNU port.
+面向 **小米平板 4 8 英寸 LTE 版**（`clover`，`xiaomi,clover-lte`，高通 **SDM660**）的
+Mu-Silicium 设备包。它与同级仓库 `UniXNU-clover`（负责 XNU 和 boot 镜像）一起，
+组成一次 UniXNU 移植的 UEFI 那一半。
 
-It is an **overlay, not a fork**: files that land inside a plain
-`Project-Silicium/Mu-Silicium` checkout.
+它是**叠加层，不是 fork**：这里的文件会被放进一个普通的
+`Project-Silicium/Mu-Silicium` 检出中使用。
 
 ```
-Platforms/Xiaomi/cloverPkg/clover.dsc            the platform
-Platforms/Xiaomi/cloverPkg/clover.fdf            the firmware volume layout
-Platforms/Xiaomi/cloverPkg/clover.dec            placeholder, upstream ships these empty
-Platforms/Xiaomi/cloverPkg/DeviceBuild.py        the stuart builder build_uefi.py expects
-Platforms/Xiaomi/cloverPkg/Include/APRIORI.inc   DXE apriori order for clover
-Platforms/Xiaomi/cloverPkg/Include/DXE.inc       the module list
-Platforms/Xiaomi/cloverPkg/Include/RAW.inc       SecParti.cfg and friends
-Platforms/Xiaomi/cloverPkg/Drivers/CloverGopDxe  a GraphicsOutput over the splash window
-Platforms/Xiaomi/cloverPkg/Library/MemoryMapLib          clover's own DDR map
-Platforms/Xiaomi/cloverPkg/Library/ConfigurationMapLib   the SDM660 register table
-Resources/Configs/clover.toml                    firmware volume geometry, boot image packing
-Resources/DTBs/clover.{dtb,dts}                  this unit's own board tree, cut from its boot image
-BootShim/BootShim.S                              upstream's shim with an Image Size fix
-proprietary-files.txt                            what must be extracted from the tablet
-scripts/apply-clover-overlay.py                  copy this overlay into a checkout
-scripts/check-clover-uefi.py                     verify the result, and the two repos agree
-scripts/extract-clover-blobs.py                  build Binaries/clover from the unit's own xbl
-scripts/fetch-mu-silicium.sh                     pinned-SHA checkout, through the mirror
-scripts/build-clover-uefi.sh                     colima guest, then the EDK II build
-scripts/seed-clover-extdeps.py                   fill the stuart extdep cache
-scripts/fv-order.py                              FVMAIN file indexes, for the standalone path
-scripts/decode-boot-header.py                    print a boot image header, both geometries
-scripts/split-clover-dtbs.py                     cut the DTB table out of a stock boot image
-scripts/scan-clover-dtbs.sh                      name each DTB record
+Platforms/Xiaomi/cloverPkg/clover.dsc            平台描述
+Platforms/Xiaomi/cloverPkg/clover.fdf            固件卷布局
+Platforms/Xiaomi/cloverPkg/clover.dec            占位文件，上游这些包也留空
+Platforms/Xiaomi/cloverPkg/DeviceBuild.py        stuart 构建器 build_uefi.py 要求的入口
+Platforms/Xiaomi/cloverPkg/Include/APRIORI.inc   clover 的 DXE apriori 顺序
+Platforms/Xiaomi/cloverPkg/Include/DXE.inc       模块列表
+Platforms/Xiaomi/cloverPkg/Include/RAW.inc       SecParti.cfg 等原始数据
+Platforms/Xiaomi/cloverPkg/Drivers/CloverGopDxe  在 splash 窗口上发布 GraphicsOutput
+Platforms/Xiaomi/cloverPkg/Library/MemoryMapLib          clover 自己的 DDR 内存图
+Platforms/Xiaomi/cloverPkg/Library/ConfigurationMapLib   SDM660 寄存器表
+Resources/Configs/clover.toml                    固件卷几何、boot 镜像打包
+Resources/DTBs/clover.{dtb,dts}                  本机自己的板级设备树，从它的 boot 镜像里切出
+BootShim/BootShim.S                              上游 shim，外加一处 Image Size 修正
+proprietary-files.txt                            必须从平板里提取的东西
+scripts/apply-clover-overlay.py                  把叠加层复制进检出
+scripts/check-clover-uefi.py                     校验结果，并核对两个仓库是否一致
+scripts/extract-clover-blobs.py                  用本机自己的 xbl 生成 Binaries/clover
+scripts/clockdxe_patch.py                        对 ClockDxe 做上游那六处改动
+scripts/fetch-mu-silicium.sh                     按固定 SHA 拉取检出，走镜像
+scripts/build-clover-uefi.sh                     colima 客户机，然后跑 EDK II 构建
+scripts/seed-clover-extdeps.py                   填充 stuart extdep 缓存
+scripts/fv-order.py                              FVMAIN 文件序号，独立构建路径用
+scripts/decode-boot-header.py                    打印 boot 镜像头，兼容两种几何
+scripts/split-clover-dtbs.py                     从 stock boot 镜像里切出 DTB 表
+scripts/scan-clover-dtbs.sh                      给每条 DTB 记录命名
 ```
 
-The vendor blob set lives under `Binaries/clover`, is gitignored, and comes from
-this unit's own firmware rather than from Device-Binaries (which has no clover
-directory). `proprietary-files.txt` is its reviewable contract.
+厂商 blob 放在 `Binaries/clover` 下，已加入 gitignore，来源是本机自己的固件，
+而不是 Device-Binaries（后者没有 clover 目录）。`proprietary-files.txt` 是它可审查的清单。
 
-## The tablet, as far as the firmware cares
+## 固件眼中的这台平板
 
-| | |
+| 项目 | 值 |
 | --- | --- |
 | SoC | Qualcomm SDM660 |
-| Silicon package | `Silicon/Qualcomm/StarlordPkg` |
-| Board id | `qcom,msm-id = <317 0>`, `qcom,board-id = <0x0001000b 0>` — platform 11 (MTP) with subtype 1, read off the merged dtb on the device |
-| Cores | 8 CPUs at `reg` 0x0-0x3 (part `0x801`) and 0x100-0x103 (part `0x800`), `enable-method = "psci"` |
-| GIC | distributor `0x17A00000` + `0x10000`, redistributor `0x17B00000` + `0x100000`, stride `0x20000` |
-| Timebase | 19.2 MHz |
-| DRAM | `0x80000000` + `0x80000000`; the second bank at `0x100000000` + `0x7E4C0000` is not described yet |
-| Panel | 1200×1920, 32 bpp, splash handed over at `0x9D400000` + `0x2400000` |
-| Storage | eMMC (`sdhc_1` at `0x0c0c4000`) — no UFS |
-| Console | `blsp1_uart2` at `0x0C170000`, 115200 |
-| Firmware volume | `0x9FC00000` + `0x300000` |
-| Boot image | header v0, page 4096, base 0, kernel `0x8000`, ramdisk `0x1000000`, tags `0x100` |
+| 芯片包 | `Silicon/Qualcomm/StarlordPkg` |
+| 板 id | `qcom,msm-id = <317 0>`、`qcom,board-id = <0x0001000b 0>` —— 平台 11（MTP）+ 子类型 1，读自真机 merged dtb |
+| 核心 | 8 个 CPU，`reg` 0x0-0x3（part `0x801`）和 0x100-0x103（part `0x800`），`enable-method = "psci"` |
+| GIC | distributor `0x17A00000` + `0x10000`，redistributor `0x17B00000` + `0x100000`，stride `0x20000` |
+| 时基 | 19.2 MHz |
+| DRAM | `0x80000000` + `0x80000000`；第二个 bank `0x100000000` + `0x7E4C0000` 尚未描述 |
+| 屏幕 | 1200×1920，32 bpp，splash 移交地址 `0x9D400000` + `0x2400000` |
+| 存储 | eMMC（`sdhc_1` @ `0x0c0c4000`），没有 UFS |
+| 控制台 | `blsp1_uart2` @ `0x0C170000`，115200 |
+| 固件卷 | `0x9FC00000` + `0x300000` |
+| boot 镜像 | header v0，页 4096，base 0，kernel `0x8000`，ramdisk `0x1000000`，tags `0x100` |
 
-The splash window is a device measurement, not a device-tree reading:
-`sdm660-common.dtsi` and `clover-overlay.dtsi` disagree about it, while
-`uefiplat.cfg` in *this unit's* xbl reserves `0x9D400000` + `0x2400000` as
-"Display Reserved" and stock xbl has already drawn into it before any UEFI code
-runs. `MemoryMapLib.c`, `clover.toml` and the ADT all use that address.
+splash 窗口的地址来自实机测量，不是设备树读数：`sdm660-common.dtsi` 与
+`clover-overlay.dtsi` 说法不一致，而**本机** xbl 里的 `uefiplat.cfg` 把
+`0x9D400000` + `0x2400000` 保留为 "Display Reserved"，且在 UEFI 运行之前
+stock xbl 已经往这段里画过东西。`MemoryMapLib.c`、`clover.toml` 和 ADT 用的都是这个地址。
 
-There is no ramdisk filesystem driver in this volume. `Fat` and `PartitionDxe`
-are dispatched, but the only `BlockIo` they can see comes from `SdccDxe`, so the
-UniXNU payload cannot ride in the boot image's ramdisk: it is a FAT volume on an
-eMMC partition (`cache`, `mmcblk0p49`) and the boot image carries no ramdisk.
-`ramoops`/pstore wants `0x9FE00000`, which is inside the firmware volume, so a
-panic goes to the UART.
+这个固件卷里没有 ramdisk 文件系统驱动。`Fat` 和 `PartitionDxe` 会被调度，
+但它们能看到的唯一 `BlockIo` 来自 `SdccDxe`，所以 UniXNU payload 不可能搭
+boot 镜像的 ramdisk 进来：它必须是 eMMC 分区上的一个 FAT 卷
+（`cache`，`mmcblk0p49`），boot 镜像则完全不带 ramdisk。
+`ramoops`/pstore 想要 `0x9FE00000`，那在固件卷范围内，所以 panic 只能走 UART。
 
-`uefiplat.cfg`'s `[MemoryMap]` and `[RegisterMap]` are transcribed row for row
-into `MemoryMapLib`, and 27 `[ConfigParameters]` keys into `ConfigurationMapLib`.
-The map stops at `0xA0000000`.
+`uefiplat.cfg` 的 `[MemoryMap]` 和 `[RegisterMap]` 已逐行抄进 `MemoryMapLib`，
+27 个 `[ConfigParameters]` 键抄进 `ConfigurationMapLib`。内存图止于 `0xA0000000`。
 
-The boot image is v0: `boot` and `recovery` on this unit both have 0 in the
-header version slot, `page_size` 0x1000, and base-relative load offsets with the
-`0x80000000` left for the ABL to add. Their kernel section is `Image.gz` with the
-device trees appended after the gzip stream, selected by `qcom,msm-id` /
-`qcom,board-id`. The DTB this overlay ships is record `037` of that 111-record
-table — the only sdm660 blob carrying `qcom,mdss_dsi_nt51021_boe_wuxga_video`.
+boot 镜像是 v0：本机的 `boot` 和 `recovery` 两个分区 header version 都是 0，
+`page_size` 0x1000，加载偏移是相对 base 的，`0x80000000` 留给 ABL 自己加。
+它们的 kernel 段是 `Image.gz`，gzip 流后面串着设备树，由 `qcom,msm-id` /
+`qcom,board-id` 挑选。这个叠加层带的 DTB 是那张 111 条记录的表里的第 `037` 条
+—— 唯一带 `qcom,mdss_dsi_nt51021_boe_wuxga_video` 的 sdm660 blob。
 
-## Display
+## 显示
 
-`clover.toml` sets `USE_CUSTOM_DISPLAY_DRIVER = 1`, which compiles out
-`SimpleFbDxe` and brings in the unit's own `DisplayDxe` blob. That blob contains
-the GOP GUID but never publishes a usable interface in this build, and
-`GraphicsConsoleDxe` consequently has an unsatisfiable depex — the only console
-left is `SimpleTextInOutSerial`. `Drivers/CloverGopDxe` closes that gap with a
-single-mode GOP at `0x9D400000` (1200×1920, `PixelBlueGreenRedReserved8BitPerColor`)
-implemented over the window ABL is already scanning out. It sits in `APRIORI.inc`
-immediately before `GraphicsConsoleDxe`, and APRIORI entries are started without
-a depex evaluation, so it does not depend on the vendor blob.
+`clover.toml` 设 `USE_CUSTOM_DISPLAY_DRIVER = 1`，这会编掉 `SimpleFbDxe`，
+换成机器自带的 `DisplayDxe` blob。那个 blob 里有 GOP GUID，但在这次构建里
+从未发布过可用接口，于是 `GraphicsConsoleDxe` 的 depex 无法满足——能用的
+控制台只剩 `SimpleTextInOutSerial`。`Drivers/CloverGopDxe` 补上这个缺口：
+在 ABL 正在扫描的窗口 `0x9D400000` 上发布单模式 GOP（1200×1920，
+`PixelBlueGreenRedReserved8BitPerColor`）。它在 `APRIORI.inc` 里紧挨
+`GraphicsConsoleDxe` 之前，而 APRIORI 条目启动时不评估 depex，所以它不依赖厂商 blob。
 
-## What UniXNU adds to a stock device package
+## ClockDxe 为什么要打补丁
 
-gta4l's README says to hand-edit the DSC and `Include/DXE.inc` after each
-checkout update. clover carries the same three modules behind a define instead:
+本机固件卷里的 `ClockDxe` 在 SDM660 上会卡死在两处没有超时的硬件握手里：
+一次 RCGR 更新（`MMCC + 0x2040`，`mdp_clk_src`）和一次 GDSC PWR_ON 等待。
+DXE 调度是串行的，卡在 ClockDxe 就不再往下走，`DisplayDxe`、BDS 和
+`CloverGopDxe` 都轮不到——屏幕就停在 ABL 画的 Mi 标志上。
+
+上游对同一个问题已经有定论：Project-Silicium/Device-Binaries 里
+`ClockDxe.patched.efi` 与 stock `ClockDxe.efi` 只差 24 个字节，
+全部是在时钟规划初始化里把六条 `BL` 换成 NOP，lavender 的 INF 直接引用
+patched 文件。本机 stock blob 在这六个偏移上写着同样的指令字，所以这里照做：
+
+```sh
+python3 scripts/extract-clover-blobs.py --xbl <p-xbl.bin> --checkout ~/mu-clover
+```
+
+提取脚本会同时写出 stock `ClockDxe.efi`（留作对照）和
+`ClockDxe.patched.efi`，并把 INF 的 `PE32` 指向后者。`check-clover-uefi.py`
+会反过来验证 INF 确实引用了 patched 文件、且六个站点都已是 NOP。
+
+## UniXNU 给 stock 设备包加了什么
+
+gta4l 的 README 让你在每次检出更新后手改 DSC 和 `Include/DXE.inc`。
+clover 则用同一个宏把三个模块收在一起：
 
 ```
 !ifdef $(UNIXNU_BUILD)
@@ -105,39 +118,37 @@ checkout update. clover carries the same three modules behind a define instead:
 !endif
 ```
 
-`UniXNU-clover/board.toml` sets `UNIXNU_BUILD = "1"` in `[firmware.defines]`,
-and `firmware.py` turns that table into `-D` arguments. One checkout with this
-overlay therefore builds two things from one DSC: plain Android firmware with
-`build_uefi.py -d clover`, and the UniXNU volume with `./unixnu build firmware`.
-The two package roots come from the board repository (`{tree}/package` and
-`{tree}/drivers/DarwinBoot`) through `[firmware] packages`.
+`UniXNU-clover/board.toml` 在 `[firmware.defines]` 里设了
+`UNIXNU_BUILD = "1"`，`firmware.py` 会把这张表变成 `-D` 参数。于是同一份检出
+加这个叠加层，能用同一份 DSC 构建两种东西：普通 Android 固件
+（`build_uefi.py -d clover`），以及 `./unixnu build firmware` 产出的 UniXNU 固件卷。
+两个包根 `{tree}/package` 和 `{tree}/drivers/DarwinBoot` 由板级仓库通过
+`[firmware] packages` 提供。
 
-## Build
+## 构建
 
-macOS cannot build this (CLANGPDB cross-compiles AArch64 PE/COFF against Linux
-headers), so the compile runs in a Linux guest under colima.
+macOS 无法直接构建（CLANGPDB 要对着 Linux 头文件交叉编译 AArch64 PE/COFF），
+所以编译在 colima 下的 Linux 客户机里进行。
 
 ```sh
-bash scripts/fetch-mu-silicium.sh ~/mu-clover   # pinned-SHA fetch, no --recursive
+bash scripts/fetch-mu-silicium.sh ~/mu-clover   # 按固定 SHA 拉取，不带 --recursive
 python3 scripts/apply-clover-overlay.py --uefi ~/mu-clover
-bash scripts/build-clover-uefi.sh               # guest provision, overlay, build
+bash scripts/build-clover-uefi.sh               # 配置客户机、套叠加层、构建
 ```
 
-`fetch-mu-silicium.sh` takes every commit from the parent tree's `git submodule
-status` — never a branch name — and asserts each checkout with `git rev-parse
-HEAD`, because direct GitHub transport stalls on this network while
-`gh-proxy.com` answers by SHA. It goes one level below the direct submodules,
-since mu_basecore vendors nine more repositories.
+`fetch-mu-silicium.sh` 从父树的 `git submodule status` 里取每一个提交
+——从不取分支名——并用 `git rev-parse HEAD` 核对每个检出，因为直连 GitHub
+在这条网络上会卡住，而 `gh-proxy.com` 能按 SHA 应答。它还会再往下一层，
+因为 mu_basecore 又内嵌了九个仓库。
 
-`build-clover-uefi.sh` provisions an Ubuntu 24.04 arm64 guest under colima's
-`clover` profile, installs upstream's dependency set, re-applies this overlay,
-rsyncs the tree into the guest, seeds the extdep cache, runs `stuart_update`,
-and finishes with `build_uefi.py -d clover`. `seed-clover-extdeps.py` fills
-`STUART_EXTDEP_CACHE_PATH` by fetching each GitHub `ext_dep` through the mirror
-and checking the sha256 the descriptor advertises — without it a network failure
-surfaces as "External Dependencies in the environment are out of date".
+`build-clover-uefi.sh` 在 colima 的 `clover` profile 下准备 Ubuntu 24.04 arm64
+客户机，安装上游依赖，重新套一遍叠加层，把树 rsync 进客户机，填充 extdep 缓存，
+跑 `stuart_update`，最后执行 `build_uefi.py -d clover`。`seed-clover-extdeps.py`
+通过镜像逐个拉取 GitHub 上的 `ext_dep`，并核对描述文件里写的 sha256，把它填进
+`STUART_EXTDEP_CACHE_PATH`——没有它，一次网络故障会以
+"External Dependencies in the environment are out of date" 的形式出现。
 
-The supported path is the board repository's driver:
+推荐路径是板级仓库里的驱动：
 
 ```sh
 cd ~/UniXNU
@@ -145,50 +156,45 @@ cd ~/UniXNU
 ./unixnu bootimg --ramdisk none -o ~/clover-out/clover-boot.img
 ```
 
-`scripts/unixnu/firmware.py` reads `board.toml`, opens
-`Resources/Configs/clover.toml` for the `[uefi_fd]` geometry, passes every
-`[firmware.defines]` key as `-D`, and calls EDK II's `build` with
-`-p Platforms/Xiaomi/cloverPkg/clover.dsc`. `bootimg` compiles
-`BootShim/BootShim.S` from the checkout, prepends it to the volume, gzips the
-pair and appends the board DTB — the shape the stock ABL expects. It checks the
-shim's Image Size against the bytes it puts in the kernel field, which is why
-this overlay's `BootShim.S` writes `FD_SIZE + shim` instead of `FD_SIZE`.
+`scripts/unixnu/firmware.py` 读取 `board.toml`，打开
+`Resources/Configs/clover.toml` 查 `[uefi_fd]` 几何，把
+`[firmware.defines]` 的每个键传成 `-D`，再以
+`-p Platforms/Xiaomi/cloverPkg/clover.dsc` 调用 EDK II 的 `build`。
+`bootimg` 编译检出里的 `BootShim/BootShim.S`，把它拼在固件卷前面，对这两段
+gzip，然后追加板级 DTB——正是 stock ABL 期待的形状。它会核对 shim 的
+Image Size 与 kernel 字段实际写入的字节数，所以本叠加层的 `BootShim.S` 写的是
+`FD_SIZE + shim` 而不是 `FD_SIZE`。
 
-`[boot_image]` in `clover.toml` covers the standalone path. `build_uefi.py` only
-forwards a `[boot_image]` key when it is truthy, so `base` cannot be set to 0 and
-mkbootimg's defaults (2048-byte pages, `0x10000000` base) stand there; every Mu
-device shares that default, and all of them are header v1 or newer. clover is v0,
-so the image that goes on the tablet is the one `./unixnu bootimg` packs: page
-4096, base 0, stock offsets.
+`clover.toml` 里的 `[boot_image]` 是为独立构建路径准备的。`build_uefi.py`
+只在 `[boot_image]` 的值非零/为真时才转发它，所以 `base` 没法设成 0，
+mkbootimg 的默认值（2048 字节页、`0x10000000` base）会生效；所有 Mu 设备
+都吃这个默认值，而且都是 header v1 或更新。clover 是 v0，所以真正上机的是
+`./unixnu bootimg` 打出来的镜像：页 4096、base 0、stock 偏移。
 
-## Checking
+## 检查
 
 ```sh
-python3 scripts/check-clover-uefi.py                      # offline
+python3 scripts/check-clover-uefi.py                      # 离线
 python3 scripts/check-clover-uefi.py --checkout ~/mu-clover
 ```
 
-Five groups. `fv` expands `clover.fdf` the way EDK II's preprocessor would and
-cross-checks every `INF` and `SECTION RAW` against `proprietary-files.txt` in
-both directions. `blobs` looks at a real checkout. `map` parses `MemoryMapLib.c`
-and fails on any overlap that is not the documented IMEM nesting. `board` pins
-the geometry across the two repositories: the `[uefi_fd]` size, the `UEFI FD`
-row, the ADT's `uefi_fd`, the splash window against the `Display Reserved` row,
-every ADT reserved region against the memory map, `header_version`, whether
-`board.toml` still carries `UNIXNU_BUILD`, and that every `INF` in
-`APRIORI.inc`/`DXE.inc` is also declared in `clover.dsc`. `inf` resolves every
-`[Protocols]` GUID this overlay's INFs name against the `.dec` files the same
-INF lists in `[Packages]`.
+五组检查。`fv` 按 EDK II 预处理器的方式展开 `clover.fdf`，把每个 `INF` 和
+`SECTION RAW` 与 `proprietary-files.txt` 双向核对。`blobs` 看真实检出，
+包括 ClockDxe 是否链接 patched 文件、六个站点是否都是 NOP。`map` 解析
+`MemoryMapLib.c`，除已记录的 IMEM 嵌套外任何重叠都算错。`board` 把几何钉死在
+两个仓库之间：`[uefi_fd]` 大小、`UEFI FD` 行、ADT 的 `uefi_fd`、splash 窗口
+对 `Display Reserved` 行、ADT 每个保留区对内存图、`header_version`、
+`board.toml` 是否仍带 `UNIXNU_BUILD`，以及 `APRIORI.inc`/`DXE.inc` 里的每个
+`INF` 是否也在 `clover.dsc` 里声明。`inf` 把本叠加层 INF 的每个 `[Protocols]`
+GUID 对它自己在 `[Packages]` 里列的 `.dec` 文件解析一遍。
 
-It runs on the stock macOS Python 3.9 (`tomllib`, `tomli`, or a built-in subset
-reader).
+它跑在系统自带的 macOS Python 3.9 上（`tomllib`、`tomli`，或内置的子集解析器）。
 
-## On the tablet
+## 上机
 
-The meaningful test is a cold boot from the flashed partition, because that is
-the path where the stock loader draws the Mi splash first — anything taking the
-panel over afterwards is unmissable. `fastboot boot` never draws the splash on
-this tablet, so its black screen carries no information.
+有意义的测试是刷进分区后的冷启动，因为这条路径上 stock loader 会先画出 Mi
+启动画面——之后任何接管屏幕的动作都无处可藏。`fastboot boot` 在这台平板上
+从不画启动画面，所以它的黑屏不携带任何信息。
 
 ```sh
 adb -s 81ffcaaa reboot bootloader
@@ -198,35 +204,34 @@ fastboot flash cache ~/UniXNU/out/clover/payload/payload.img
 fastboot reboot
 ```
 
-The payload on `cache` is what the UniXNU menu reads. `boot` is `mmcblk0p12`;
-the stock contents are dumped byte-complete in the board repository at
-`facts/81ffcaaa-20261022-210928/img/unixnu-boot.img`, and the bootloader is
-unlocked, so restoring is one command:
+`cache` 上的 payload 就是 UniXNU 菜单读取的内容。`boot` 是 `mmcblk0p12`；
+stock 内容在板级仓库里逐字节完整地存了一份：
+`facts/81ffcaaa-20261022-210928/img/unixnu-boot.img`，bootloader 已解锁，
+恢复只需一条命令：
 
 ```sh
 fastboot flash boot ~/UniXNU-clover/facts/81ffcaaa-20261022-210928/img/unixnu-boot.img
 ```
 
-A hang recovers with Power+Volume-Down held for 10-20 seconds.
+卡死时按住电源键 + 音量减 10-20 秒即可恢复。
 
-## Porting status
+## 移植进度
 
-Against the guide's bring-up order (`unixnu.com/porting/bring-up`):
+对照官方指南的 bring-up 顺序（`unixnu.com/porting/bring-up`）：
 
-| Stage | State |
+| 阶段 | 状态 |
 | --- | --- |
-| UEFI reaches BDS with the services the port needs | GOP published by `CloverGopDxe`; simple text in/out, serial, `BlockIo`/`SimpleFileSystem` from `SdccDxe`, FV2 and the variable stack from APRIORI. A boot that reaches the menu on the panel is the open confirmation |
-| UniXNU menu reads the payload volume | payload written to `cache`; menu over serial works, the graphics menu awaits the GOP test |
-| Payload handoff to DarwinBoot | not started on this unit |
-| DarwinBoot to XNU entry | not started |
-| Storage and root device | not started |
-| Userland | not started |
+| UEFI 到达 BDS，且移植所需服务齐全 | `CloverGopDxe` 已发布 GOP；simple text in/out、串口、`SdccDxe` 提供的 `BlockIo`/`SimpleFileSystem`、FV2 与 variable 栈均由 APRIORI 启动。仍需一次真正把菜单显示到屏幕上的启动来确认 |
+| UniXNU 菜单读取 payload 卷 | payload 已写入 `cache`；串口菜单可用，图形菜单等 GOP 实测 |
+| payload 交接给 DarwinBoot | 本机未开始 |
+| DarwinBoot 进入 XNU | 未开始 |
+| 存储与 root 设备 | 未开始 |
+| 用户态 | 未开始 |
 
-Firmware below `v0.3.0` carried a debug instrument — a checkpoint bar ladder, an
-exception reporter and a timer-sampled PC meter — used to find where the DXE
-dispatch stopped on this board. That work is preserved at tag `v0.2.42` and its
-findings are in the board repository's notes; it is not part of this build.
+`v0.3.0` 之前的固件带过一套调试仪器——checkpoint 刻度条、异常报告和定时器
+PC 采样——用来找出 DXE 调度在这块板上停在哪里。那部分工作保留在 `v0.2.42`
+标签上，结论写在板级仓库的 notes 里，不属于这次构建。
 
-## License
+## 许可证
 
-BSD-2-Clause-Patent, the same as Mu-Silicium, UniXNU and UniXNU-sheng.
+BSD-2-Clause-Patent，与 Mu-Silicium、UniXNU 和 UniXNU-sheng 一致。

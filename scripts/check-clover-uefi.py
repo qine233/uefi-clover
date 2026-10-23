@@ -37,6 +37,9 @@ HERE = pathlib.Path(__file__).resolve()
 REPO = HERE.parents[1]
 PKG = REPO / "Platforms" / "Xiaomi" / "cloverPkg"
 
+sys.path.insert(0, str(HERE.parent))
+import clockdxe_patch  # noqa: E402  (shares the six sites with the extractor)
+
 # Facts about the tablet.  DRAM_BASE, the splash window, the firmware volume
 # and the stack are all rows of the uefiplat.cfg in the device's own xbl
 # partition (UniXNU-clover/facts/<serial>-<stamp>/fw/xbl-uefiplat.txt); the
@@ -385,6 +388,21 @@ def check_group_blobs(included, externals, checkout, problems: list, warnings: l
                                  table.group(1) if table else "", re.M):
                 if not (full.parent / m.group(1)).is_file():
                     problems.append(f"{path} names {m.group(1)} which is not next to it")
+        if path.endswith("QcomPkg/Drivers/ClockDxe/ClockDxe.inf"):
+            # The stock blob spins in two unbounded hardware handshakes, and dispatch
+            # stops there before any display driver runs.  Both this repository and
+            # upstream ship the same six-call edit under the .patched name.
+            names = re.findall(r"PE32\|\s*([^|\s]+)", text)
+            if "ClockDxe.patched.efi" not in names:
+                problems.append(f"{path} does not link ClockDxe.patched.efi")
+            patched = full.parent / "ClockDxe.patched.efi"
+            if patched.is_file():
+                data = patched.read_bytes()
+                stock = [o for o, b in clockdxe_patch.SITES.items()
+                         if data[o:o + 4] == b]
+                if stock:
+                    problems.append(f"{path}: ClockDxe.patched.efi still carries the "
+                                    f"stock call at {len(stock)} of the six sites")
     note("*", f"checked {len(binaries)} blob paths against {checkout}")
 
 

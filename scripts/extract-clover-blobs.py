@@ -36,6 +36,8 @@ import struct
 import sys
 import zlib
 
+import clockdxe_patch
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 PKG = REPO / "Platforms" / "Xiaomi" / "cloverPkg"
 INCLUDE = PKG / "Include"
@@ -57,8 +59,9 @@ SECTION_NAMES = {0x01: "COMPRESSION", 0x02: "GUID_DEFINED", 0x05: "PEI_DEPEX",
 # firmware volume cannot tell us (MODULE_TYPE and whether the module's INF has a
 # [Depex] at all) and for the directory names the drivers are filed under, which
 # do not always match the path baked into the binary.  Upstream ships
-# ButtonsDxe/ClockDxe/UsbMsdDxe as *.patched.efi; that is their own local edit, so
-# the table below names the plain .efi and this script writes the stock bytes.
+# ClockDxe as ClockDxe.patched.efi and lavender's INF selects it; clover does the
+# same, applying the same six-call edit (scripts/clockdxe_patch.py) to its own
+# stock bytes.
 UPSTREAM = [
     ("DE371F7C-DEC4-4D21-ADF1-593ABCC15882", "ArmPkg/Drivers/ArmGic/ArmGicDxe.inf", "ArmGicDxe", "DXE_DRIVER", "EfiEntry",
             "DXE_DEPEX|ArmGicDxe.depex;PE32|ArmGicDxe.efi"),
@@ -117,7 +120,7 @@ UPSTREAM = [
     ("10E193DF-9966-44E7-B17C-59DD831E20FC", "QcomPkg/Drivers/ChipInfoDxe/ChipInfoDxe.inf", "ChipInfo", "DXE_DRIVER", "EfiEntry",
             "DXE_DEPEX|ChipInfoDxe.depex;PE32|ChipInfoDxe.efi"),
     ("4DB5DEA6-5302-4D1A-8A82-677A683B0D29", "QcomPkg/Drivers/ClockDxe/ClockDxe.inf", "ClockDxe", "DXE_DRIVER", "EfiEntry",
-            "DXE_DEPEX|ClockDxe.depex;PE32|ClockDxe.efi"),
+            "DXE_DEPEX|ClockDxe.depex;PE32|ClockDxe.patched.efi"),
     ("8E9BD160-B184-11DF-94E2-0800200C9A66", "QcomPkg/Drivers/DALSYSDxe/DALSYSDxe.inf", "DALSys", "DXE_DRIVER", "EfiEntry",
             "DXE_DEPEX|DALSYSDxe.depex;PE32|DALSYSDxe.efi"),
     ("6B38F7B4-AD98-40E9-9093-ACA2B5A253C4", "QcomPkg/Drivers/DiskIoDxe/DiskIoDxe.inf", "DiskIoDxe", "UEFI_DRIVER", "",
@@ -482,6 +485,15 @@ def main() -> int:
                     problems.append(f"{rel}: the volume has no AArch64 PE32 section "
                                     f"for {row[0]}")
                     continue
+                if row[2] == "ClockDxe":
+                    # Both files, as upstream keeps them: the stock section for
+                    # review, the patched one the INF actually links.
+                    write(target.parent / "ClockDxe.efi", payload, written, args.dry_run)
+                    try:
+                        payload = clockdxe_patch.apply(payload)
+                    except clockdxe_patch.PatchError as error:
+                        problems.append(f"{rel}: {error}")
+                        continue
                 write(target.parent / filename, payload, written, args.dry_run)
             elif kind == "DXE_DEPEX":
                 if ffs["depex"] is None:

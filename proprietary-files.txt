@@ -184,12 +184,13 @@ R Binaries/clover/QcomPkg/Drivers/SPMIDxe/SPMIDxe.depex
 
 # --- clocks, power, remote processors ---------------------------------------
 #
-# Round 16 left these three out while the driver was out of the volume, and round 17
-# brings them back with it: the photograph from that build read SdccDxe, so the removal
-# had answered its question and has no further use.  They were commented rather than
-# re-marked `O` all the way through, because `O` means "behind a guard that is off" and
-# this was a deliberate experiment -- the blob never stopped being extracted from the
-# tablet's own xbl.
+# ClockDxe is the clock producer SdccDxe waits on.  The stock blob spins
+# forever in two hardware handshakes (an RCGR update and a GDSC power-on
+# ack), and dispatch stops there before any display driver or BDS runs.  The
+# INF therefore links ClockDxe.patched.efi, the same six-call edit upstream
+# ships under that name: scripts/clockdxe_patch.py turns the six BL
+# instructions into NOPs, and extract-clover-blobs.py writes both the stock
+# section (kept for review) and the patched payload next to it.
 #
 R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
 R Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.efi

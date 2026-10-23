@@ -750,15 +750,16 @@ def check_group_board(map_rows, defines, problems, warnings, unixnu_arg):
     probe = REPO / "BootShim" / "BootShim.S"
     if probe.is_file():
         text = probe.read_text()
-        if "SPLASH_BASE" in text or "SPLASH_FILL" in text:
-            problems.append("BootShim/BootShim.S still paints the splash window; the "
-                            "framebuffer belongs to CloverGopDxe and GraphicsConsoleDxe")
-        elif "FD_SIZE + (_Payload - _Head)" not in text:
+        if ("0x9D400000" not in text or "0x9DCCA000" not in text
+                or "str   x8, [x7], #8" not in text):
+            problems.append("BootShim/BootShim.S no longer paints the window red; the red "
+                            "fill is the only signal that ABL jumped into the shim")
+        if "FD_SIZE + (_Payload - _Head)" not in text:
             problems.append("BootShim/BootShim.S does not write an Image Size that covers "
                             "the shim and the firmware volume it carries")
         else:
-            note("*", "BootShim writes text_offset = FD_BASE and an Image Size over the "
-                      "shim plus the volume, and paints nothing")
+            note("*", "BootShim paints the scanned window red before the copy, writes "
+                      "text_offset = FD_BASE and an Image Size over the shim plus the volume")
 
     # Measured, the hard way: an INF that only the FDF lists is not built at all, and
     # the build stops with "Module ... NOT found in DSC file; Is it really a binary

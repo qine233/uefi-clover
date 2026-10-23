@@ -37,12 +37,18 @@
   fill and buffer to video; GraphicsConsoleDxe uses buffer to video and reads
   the panel back with video to buffer when it redraws a character cell.
 
-  Two solid fills are the stage-1 liveness signals, because "the Mi splash is
-  still there" cannot tell "our code never ran" from "our code ran and never
-  drew". Green means this driver installed the GOP; blue means BdsDxe installed
-  its arch protocol, i.e. the DXE dispatcher ran to completion. The UniXNU menu
-  paints over either one. A screen that stays on the Mi splash means dispatch
-  stopped before either point; green alone means it stopped before BDS.
+  The panel is a liveness ladder, because "the Mi splash is still there"
+  cannot tell "our code never ran" from "our code ran and never drew". Red is
+  painted by BootShim before it copies a byte, so red means ABL jumped into the
+  shim. Green is painted here once the GOP is installed, so green means DXE
+  dispatch reached this driver. The UniXNU menu paints over green, and the Mi
+  splash means ABL never entered the shim at all.
+
+  There is deliberately no third colour for BDS. BdsDxe sits at APRIORI line 68
+  and installs its arch protocol in its entry point, long before line 109
+  reaches this driver; CoreRegisterProtocolNotify does not report interfaces
+  that already exist, so a notification here would fire only if something
+  reinstalled the protocol, and would say nothing in the normal case.
 
   Copyright (c) 2026, UniXNU contributors. All rights reserved.
   SPDX-License-Identifier: BSD-2-Clause-Patent
@@ -55,7 +61,6 @@
 #include <Library/MemoryAllocationLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 
-#include <Protocol/Bds.h>
 #include <Protocol/GraphicsOutput.h>
 
 //
@@ -157,21 +162,6 @@ PaintPanel (
   Pixel.Red      = Red;
   Pixel.Reserved = 0;
   FillRect (0, 0, CLOVER_PANEL_WIDTH, CLOVER_PANEL_HEIGHT, &Pixel);
-}
-
-STATIC EFI_EVENT  mBdsEvent;
-STATIC VOID       *mBdsRegistration;
-
-STATIC
-VOID
-EFIAPI
-CloverBdsStarted (
-  IN EFI_EVENT  Event,
-  IN VOID       *Context
-  )
-{
-  PaintPanel (0xFF, 0, 0);
-  DEBUG ((DEBUG_INFO, "CloverGopDxe: BDS arch protocol installed, panel painted blue\n"));
 }
 
 STATIC
@@ -362,30 +352,6 @@ CloverGopDxeEntry (
   }
 
   PaintPanel (0, 0xFF, 0);
-
-  //
-  // BdsDxe installs this protocol at its entry point; DxeCore calls BdsEntry
-  // once the dispatch queue is empty.  The callback is the last signal this
-  // driver can give without touching the boot manager.
-  //
-  Status = gBS->CreateEvent (
-                  EVT_NOTIFY_SIGNAL,
-                  TPL_CALLBACK,
-                  CloverBdsStarted,
-                  NULL,
-                  &mBdsEvent
-                  );
-  if (!EFI_ERROR (Status)) {
-    Status = gBS->RegisterProtocolNotify (
-                    &gEfiBdsArchProtocolGuid,
-                    mBdsEvent,
-                    &mBdsRegistration
-                    );
-  }
-
-  if (EFI_ERROR (Status)) {
-    DEBUG ((DEBUG_WARN, "CloverGopDxe: no BDS notification: %r\n", Status));
-  }
 
   return EFI_SUCCESS;
 }

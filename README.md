@@ -96,24 +96,33 @@ APRIORI 条目启动时不评估 depex，所以它不依赖任何厂商 blob。
 没有 GOP 时 `GraphicsConsoleDxe` 起不来，UniXNU 会退回串口文本控制台——
 在平板上等于看不见，所以卷里必须有 `CloverGopDxe`，这条同样是检查项。
 
-"屏幕上什么都没变"分不清是"我们的代码没跑"还是"跑了但没画"，所以驱动里留了
-两段纯色填充作为阶段信号：`CloverGopDxe` 发布 GOP 后整屏涂**绿**，`BdsDxe`
-装上 BDS arch protocol（说明 DXE 调度队列已经走完）后整屏涂**蓝**。UniXNU
-菜单会盖掉这两种颜色。于是：
+"屏幕上什么都没变"分不清是"我们的代码没跑"还是"跑了但没画"，所以启动链上
+留了两个纯色信号：
+
+- **红**：`BootShim` 在拷贝固件之前先把 ABL 正在扫描的整段窗口涂红。红色出现，
+  说明 ABL 确实跳进了我们的镜像；固件之后画的任何东西都会盖掉它。
+- **绿**：`CloverGopDxe` 发布 GOP 之后整屏涂绿。绿色出现，说明 DXE 调度已经
+  走到本驱动（`APRIORI.inc` 第 109 行），`GraphicsConsoleDxe` 也就能起来。
+
+UniXNU 菜单会盖掉绿色。于是：
 
 | 屏幕 | 含义 |
 | --- | --- |
-| 一直停在 Mi 标志 | 连 `CloverGopDxe` 都没跑到，调度在更早的地方停了 |
-| 绿色 | GOP 已发布，但 BDS 没起来（调度在其后停住） |
-| 蓝色，没有菜单 | BDS 起来了，问题在 UniXNU 的启动项或应用本身 |
+| 一直停在 Mi 标志 | ABL 没有跳进 BootShim（镜像/启动流程问题），或一进去就挂了 |
+| 红色 | BootShim 跑到了，但 DXE 调度在 `CloverGopDxe` 之前停住 |
+| 绿色 | GOP 已发布，问题在 BDS 之后：UniXNU 的启动项、payload 或应用本身 |
 | 菜单 | Stage 1 达成 |
+
+BDS 本身不单独给一个颜色：`BdsDxe` 在 `APRIORI.inc` 第 68 行，比本驱动早四十行
+就装好了 BDS arch protocol，而这个 DXE 核的 `CoreRegisterProtocolNotify` 不会为
+已存在的协议触发回调，所以那样的通知只在协议被重装时才响，正常路径上永远不亮。
 
 ## ClockDxe 为什么要打补丁
 
 本机固件卷里的 `ClockDxe` 在 SDM660 上会卡死在两处没有超时的硬件握手里：
 一次 RCGR 更新（`MMCC + 0x2040`，`mdp_clk_src`）和一次 GDSC PWR_ON 等待。
-DXE 调度是串行的，卡在 ClockDxe 就不再往下走，BDS 和 `CloverGopDxe`
-都轮不到——屏幕就停在 ABL 画的 Mi 标志上。
+DXE 调度是串行的，卡在 ClockDxe 就不再往下走，`CloverGopDxe` 也轮不到——
+屏幕停在 BootShim 涂的红色上。
 
 上游对同一个问题已经有定论：Project-Silicium/Device-Binaries 里
 `ClockDxe.patched.efi` 与 stock `ClockDxe.efi` 只差 24 个字节，

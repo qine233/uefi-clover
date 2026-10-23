@@ -44,6 +44,15 @@ scripts/scan-clover-spins.py                   a blob's halt sites, grouped by t
 | Console | `blsp1_uart2` at `0x0C170000`, 115200 |
 | Firmware volume | `0x9FC00000` + `0x300000` |
 
+There is no ramdisk filesystem driver in this volume, and that is a fact about the
+volume, not about the ramdisk. `Fat` and `PartitionDxe` are dispatched before BDS, but
+the only `BlockIo` they can ever see comes from `SdccDxe`; nothing in the volume
+interprets a memory buffer as a filesystem. So UniXNU's payload cannot be the boot
+image's ramdisk, however small: the volume must be written to an eMMC partition and
+mounted from there. On this board that is `cache` (`mmcblk0p49`, 256 MiB), and the
+boot image carries no ramdisk at all. The board repository's `[payload]` comment and
+its README record the same finding.
+
 The two things here that a device tree cannot settle were settled by the tablet
 itself.  `sdm660-common.dtsi` puts the splash at `0x9d400000` and
 `clover-overlay.dtsi` overrides it to `0x9d500000`, but the `uefiplat.cfg`

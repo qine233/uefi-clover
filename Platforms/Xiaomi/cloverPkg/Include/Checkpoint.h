@@ -298,6 +298,19 @@
   BootShim fill, so the whole table moved to a 256 KiB stride; the ordering
   top-to-bottom is unchanged, only the spacing.
 
+  Round 23 adds the defence the ladder never had.  Every bar is painted once, when its fact
+  becomes true, so anything that clears the window erases the reading for good -- which is
+  what round 22 showed on the device: the bands appeared, then only a backlight, then the
+  unit powered off.  A hang cannot do that; a hang leaves the picture up.  So each painted
+  colour is recorded, and the tick handler compares one bar per millisecond against what it
+  should hold and repaints the ones that disagree.  The record sits inside the writer, in
+  the one place every band of the ladder must pass, so no call site can paint a bar that the
+  refresh does not know about.  It is one table per image, so what PEI painted does not reach
+  DXE, and the two PEI anchors at 0x00040000 and 0x00080000 get into the record because
+  CheckpointDxe claims their colours at entry -- claims, deliberately not repaints, because a
+  stage that paints over another stage's slot destroys the reading the first one carried,
+  which is a thing scripts/check-clover-uefi.py exists to stop.
+
   A screen with no bars at all but a real UEFI image is the best result: it means
   the vendor display path took the panel over.
 
@@ -342,6 +355,49 @@
 #define CLOVER_COLOR_BLACK  0xFF000000
 
 //
+// Round 23: what colour each bar of the ladder is supposed to be, so the refresh described
+// at the top of this file can tell a bar that was cleared from one that was never painted.
+// The only thing a defence needs is the colour the bar earned, and that is knowable at
+// exactly one place: the call that painted it.
+//
+// Indexed by the bar's offset in pitch-sized steps.  Every offset any caller uses is one
+// whole step: the ladder runs from 0x00040000 to 0x007C0000 at a 256 KiB pitch, which is
+// 32 slots.  Zero is not one of the colours above -- black is 0xFF000000, with the alpha
+// byte -- so an entry of zero means no bar has ever been painted there, and the refresh
+// leaves a region it has no reading for alone instead of restoring black over it.
+//
+#define CLOVER_BAR_PITCH  0x00040000
+#define CLOVER_BAR_SLOTS  32
+
+STATIC UINT32  mCloverBarArgb[CLOVER_BAR_SLOTS];
+
+/**
+  Say what colour a bar of the ladder is supposed to be, without touching the panel.
+
+  The refresh in CheckpointDxe defends what the record says, and the record is written by
+  CloverCheckpointBar below -- which is one table per image.  The anchors at 0x00040000 and
+  0x00080000 are painted in PEI, by MemoryMapLib and ConfigurationMapLib, so DXE has to state
+  their colours again here for them to be defended at all.  Stating is not repainting: a stage
+  that paints over another stage's slot destroys the reading the first one was, which is a bug
+  scripts/check-clover-uefi.py refuses the build over, and it would change nothing on a screen
+  that already holds those two bars.
+**/
+STATIC
+VOID
+CloverCheckpointClaim (
+  IN UINT64  OffsetFromSplashBase,
+  IN UINT32  Argb
+  )
+{
+  UINTN  Index;
+
+  Index = (UINTN)(OffsetFromSplashBase / CLOVER_BAR_PITCH);
+  if (Index < CLOVER_BAR_SLOTS) {
+    mCloverBarArgb[Index] = Argb;
+  }
+}
+
+//
 // Plain stores, because this runs from PEI (before the DXE memory services exist)
 // as well as from DXE, and the splash window is normal DRAM either way.  Write
 // through volatile so nothing reorders a bar past the stage it reports.
@@ -360,6 +416,8 @@ CloverCheckpointBar (
 
   Slot = (volatile UINT64 *)(UINTN)(CLOVER_SPLASH_BASE + OffsetFromSplashBase);
   Pair = ((UINT64)Argb << 32) | (UINT64)Argb;   // no LShiftU64: BASE modules skip BaseLib
+
+  CloverCheckpointClaim (OffsetFromSplashBase, Argb);
 
   for (Index = 0; Index < CLOVER_BAR_SIZE / sizeof (UINT64); Index++) {
     Slot[Index] = Pair;

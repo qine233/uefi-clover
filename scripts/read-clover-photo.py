@@ -1171,11 +1171,13 @@ def report(best, ladder, a):
                               "which the driver does not do -- this frame caught the rows "
                               "between the flag paint and the bit paint, and a second "
                               "photograph resolves it")
-                # Round 22 is the build that has a width row and no liveness row: it gave the
-                # clock band back to its own slot, because from that round on the interesting
-                # question is not whether the polled word is real but whether the driver ever
-                # reached the end of its entry point.  Say so, or the band above reads as a
-                # protocol row the tick layer forgot to borrow.
+                # Round 22 onward is the build set that has a width row and no liveness row: it
+                # gave the clock band back to its own slot, because from that round on the
+                # interesting question is not whether the polled word is real but whether the
+                # driver ever reached the end of its entry point.  Round 23 changes no row
+                # meaning at all -- it only keeps every row painted -- so it reads through
+                # exactly this branch.  Say so, or the band above reads as a protocol row the
+                # tick layer forgot to borrow.
                 if (any(roles.get(i) == "width" for i in roles) and
                         not any(roles.get(i) == "liveness" for i in roles)):
                     clock_row = next((j for j, s in ladder.items()

@@ -315,6 +315,17 @@ python3 scripts/read-clover-photo.py photo.jpg \
   --register-map ~/clover-out/register-map.txt
 ```
 
+The `fv-order.py` line above is the *shape* of the command, not a working one: that script reads
+the built firmware volumes out of `Build/cloverPkg/RELEASE_CLANGPDB/FV`, and that directory only
+exists inside the colima guest, so running it on the host prints nothing -- into a redirect,
+which then truncates the live listing it was decoding against.  Run it against the guest tree and
+pipe it out, and check the line count before believing a photograph's index:
+
+```sh
+colima ssh --profile clover -- bash -c 'cd ~/mu-build && python3 - ' \
+  < scripts/fv-order.py > ~/clover-out/fv-order.txt
+```
+
 Pass `--driver ~/clover-out/roundNN-CheckpointDxe.c` to read an archived frame: which band
 carries which bit is read out of the driver the photograph was built from, and every round
 keeps a copy of that driver next to its image.  Without it the reader uses the working tree,
@@ -376,6 +387,25 @@ still asks for another iteration, so a wait that was about to finish naturally i
 left set.  The reading that pays for that is `+0x340000`, which round 22 hands back to its own
 protocol slot -- red there means `ClockDxe` reached the end of its entry point -- together with
 the index meter, which can only leave 38 if the driver stopped being the last image loaded.
+
+Round 22 came back with no ladder to read, and the way it came back is the finding: the bands
+appeared, then the screen held only a backlight, then the tablet powered off.  A hang cannot do
+that -- a hang leaves the picture up, which is what every round before this one did -- so
+something past `ClockDxe` cleared or re-pointed the panel, and the ladder had no defence,
+because each of its bars is painted once, at the moment its fact becomes true.  Round 23 is the
+instrument that survives that: `CloverCheckpointBar` now records the colour it leaves behind,
+indexed by the bar's position in the ladder's own 256 KiB pitch, and the tick handler spends one
+bar of every millisecond comparing the panel against that record and putting the colour back
+where it disagrees.  One bar per tick rather than a sweep, because restoring the whole ladder is
+3.75 MiB of writes inside an interrupt handler, and thirty ticks is still far faster than a
+photograph.  The two PEI anchors are painted over in the same colours at DXE entry so they enter
+the record too -- the record is per image, and a band nobody owns is a band nobody defends.  No
+row changes meaning, so round 23 decodes exactly like round 22: red at `+0x340000` is still
+`ClockDxe` finishing, and the index meter still names whatever the dispatch loop last started.
+What the round decides is the next fork, and it is a real fork: if the ladder is readable in
+this photograph, the wipe was a clear and the boot past the clock is now visible; if the screen
+is still dark with the refresher running, the panel is no longer scanning `0x9D400000`, and the
+target moves to wherever the display driver pointed it.
 
 ## Status
 

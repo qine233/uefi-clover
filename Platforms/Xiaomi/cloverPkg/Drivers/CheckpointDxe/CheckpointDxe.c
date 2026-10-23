@@ -1271,6 +1271,7 @@ STATIC EFI_HARDWARE_INTERRUPT_PROTOCOL     *mInterrupt;
 STATIC UINT64                              mTickTicks;
 STATIC UINTN                               mTickParkKind;     // which loop mTickParkCount is
 STATIC UINTN                               mTickParkCount;    // ticks taken inside it
+STATIC UINTN                               mHealCursor;       // which bar this tick inspects
 STATIC EFI_EVENT                           mTickEvent;
 STATIC VOID                                *mTickRegistration;
 
@@ -1339,8 +1340,65 @@ PaintTick (
 }
 
 /**
+  Round 23: compare one bar of the ladder against the colour it was painted with, and put
+  that colour back if the panel no longer holds it.
+
+  Called from the tick, one bar per millisecond, so the whole ladder is inspected every
+  thirty milliseconds and a total clear is undone in about the same time -- far faster than a
+  photograph can be taken.  One bar rather than a sweep because a restore is 128 KiB of writes
+  inside an interrupt handler: the ladder is 3.75 MiB of them, and doing that every
+  millisecond would make this handler the thing the boot waits on instead of the thing
+  watching it.
+
+  Two pixels are read rather than one.  The first catches a wholesale clear; the one at the
+  middle of the bar catches a partial write that stops partway through, which a driver
+  filling its own surface would do.
+
+  Nothing here decides what a bar should say.  The record is what the paint left behind, plus
+  the two colours this driver claims for the bands PEI painted, and a bar the refresh disagrees
+  with is restored in exactly the colour it earned, never a new one.  A slot with no record is
+  skipped rather than blacked out: dark and never-painted are the same colour on this panel,
+  and a reading the driver did not produce is not a reading.
+**/
+STATIC
+VOID
+HealBar (
+  VOID
+  )
+{
+  UINTN             Index;
+  UINT64            Offset;
+  UINT32            Expected;
+  volatile UINT32   *Pixels;
+
+  Index        = mHealCursor;
+  mHealCursor  = Index + 1;
+  if (mHealCursor >= CLOVER_BAR_SLOTS) {
+    mHealCursor = 0;
+  }
+
+  Expected = mCloverBarArgb[Index];
+  if (Expected == 0) {
+    return;
+  }
+
+  Offset = (UINT64)Index * CLOVER_BAR_PITCH;
+  Pixels = (volatile UINT32 *)(UINTN)(CLOVER_SPLASH_BASE + Offset);
+
+  // The middle of the bar.  It is 128 KiB of four-byte pixels, so half of it is this many
+  // entries.
+  if ((*Pixels == Expected) && (Pixels[CLOVER_BAR_SIZE / 8] == Expected)) {
+    return;
+  }
+
+  CloverCheckpointBar (Offset, Expected);
+}
+
+/**
   The timer-interrupt callback: one sample of where the core is stuck, and, from round 22,
-  the only clock in this firmware that can say a vendor loop has waited long enough.
+  the only clock in this firmware that can say a vendor loop has waited long enough.  From
+  round 23 it has a third job, which is the reason the sample is no longer the first thing it
+  does: every millisecond it puts one bar of the ladder back if something has cleared it.
 
   Returns, unlike FaultSeen.  It has to: the instruction the tick interrupted is not
   broken, it is just not done, and ERET is the only way to keep the loop running long
@@ -1350,8 +1408,10 @@ PaintTick (
   what keeps the instrument alive: this handler has replaced the one that used to reload
   the timer, so without it there is exactly one sample and then silence.
 
-  It writes one thing: `Context->ELR`, and only when the same unbounded poll has been
-  sampled CLOVER_TICK_PARK_LIMIT times in a row.  That is not a side effect of the
+  It writes two things beyond the timer.  One bar of the ladder, when the panel has stopped
+  holding the colour that bar was painted with -- which is the same kind of write this handler
+  has always done, only repeated.  And `Context->ELR`, only when the same unbounded poll has
+  been sampled CLOVER_TICK_PARK_LIMIT times in a row.  That is not a side effect of the
   instrument -- the frame this handler is handed is the frame the vector table returns
   from, which is what makes an interrupt able to retarget the interrupted thread at all.
 **/
@@ -1389,6 +1449,13 @@ TickSeen (
 
   ArmGenericTimerSetCompareVal (ArmGenericTimerGetSystemCount () + mTickTicks);
   ArmGenericTimerReenableTimer ();
+
+  // Round 23, and first: the reading is worth nothing if the panel stopped holding it.  This
+  // runs ahead of the fault check because a wipe does not care whether a fault also happened,
+  // and ahead of the sample because keeping the ladder on the screen is the one job here that
+  // nothing else can do -- every other paint in this driver happens once, at the moment its
+  // fact becomes true.
+  HealBar ();
 
   if (mFaultPainted) {
     return;
@@ -1724,6 +1791,13 @@ CheckpointDxeEntry (
 {
   UINTN  Index;
 
+  // Round 23: the two anchors are painted in PEI, by MemoryMapLib and ConfigurationMapLib,
+  // and the colour record is per image, so as far as this driver is concerned nobody owns
+  // those two bands and the refresh would leave them cleared.  Claiming their colours puts
+  // them in the record.  Nothing is painted here: a stage that repaints another stage's slot
+  // destroys the reading the first one carried, which is what the checker builds over.
+  CloverCheckpointClaim (0x00040000, CLOVER_COLOR_GREEN);
+  CloverCheckpointClaim (0x00080000, CLOVER_COLOR_YELLOW);
   CloverCheckpointBar (0x000C0000, CLOVER_COLOR_MAGENTA);
 
   // Every slot, every bit band and every mark starts dark.  This pass has to precede

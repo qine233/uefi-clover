@@ -117,5 +117,11 @@ APRIORI DXE {
   INF EmbeddedPkg/SimpleTextInOutSerial/SimpleTextInOutSerial.inf
   INF MdeModulePkg/Universal/Console/ConPlatformDxe/ConPlatformDxe.inf
   INF MdeModulePkg/Universal/Console/ConSplitterDxe/ConSplitterDxe.inf
+
+  # Right before the console driver that needs it: a GOP over the panel buffer.
+  # The vendor DisplayDxe blob never produced one that BDS or a console could
+  # use, and SimpleFbDxe is compiled out, so GraphicsConsoleDxe's depex has been
+  # unsatisfiable on this board and every console has been the serial port.
+  INF cloverPkg/Drivers/CloverGopDxe/CloverGopDxe.inf
   INF MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsoleDxe.inf
 }

@@ -120,6 +120,13 @@
   cloverPkg/Drivers/CheckpointDxe/CheckpointDxe.inf
 
   #
+  # The GOP the vendor display blob never publishes.  Without it
+  # GraphicsConsoleDxe cannot start and a UEFI application has no surface to
+  # draw a menu on -- see the file header for the GUID scan that settled it.
+  #
+  cloverPkg/Drivers/CloverGopDxe/CloverGopDxe.inf
+
+  #
   # ACPI Tables. Silicium-ACPI has no clover board directory yet, so no tables
   # are compiled; gta4l leaves the same line commented out for that reason.
   #

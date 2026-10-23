@@ -1,0 +1,42 @@
+##
+#  clover: the Graphics Output Protocol the vendor display blob does not deliver.
+#
+#  The volume has no usable GOP producer.  SimpleFbDxe, the stock one over an
+#  inherited framebuffer, is compiled out because USE_CUSTOM_DISPLAY_DRIVER = 1;
+#  the vendor DisplayDxe blob references the GUID but provides no GOP by the
+#  time BDS runs (round 27's UnableToBoot drew no boot graphic).  Without the
+#  protocol GraphicsConsoleDxe never starts, the only console is the serial
+#  port, and a UEFI application has nothing to draw on.  This driver wraps the
+#  framebuffer the display blob already owns (0x9D400000, 1200x1920, byte 0
+#  blue).  Geometry and reserve window: clover.dsc PcdFrameBufferWidth/Height
+#  and the "Display Reserved" row of this unit's uefiplat.cfg.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = CloverGopDxe
+  FILE_GUID                      = 0C6B2F0E-5D7A-4C39-8E21-6B0F2E4A9D17
+  MODULE_TYPE                    = UEFI_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = CloverGopDxeEntry
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[Sources]
+  CloverGopDxe.c
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  DebugLib
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid    ## PRODUCES
+
+[Depex]
+  TRUE

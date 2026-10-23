@@ -126,3 +126,14 @@
   INF UniXNUPkg/Driver/UniXNUDxe/UniXNUDxe.inf
   INF DarwinBootPkg/Driver/DarwinBoot.inf
 !endif
+
+  #
+  # The GOP over the panel buffer DisplayDxe paints but does not publish
+  # (Drivers/CloverGopDxe).  Appended after the UniXNU trio rather than inserted
+  # beside the display drivers on purpose, so FVMAIN indices 1..67 -- every file
+  # any past photograph was decoded against -- keep their meaning.  The raw and
+  # config files that the FDF places after DXE.inc do shift by one; fv-order.txt
+  # is re-exported for that.  APRIORI.inc decides when this module is
+  # dispatched, and that is right before GraphicsConsoleDxe.
+  #
+  INF cloverPkg/Drivers/CloverGopDxe/CloverGopDxe.inf

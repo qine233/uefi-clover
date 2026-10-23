@@ -406,6 +406,22 @@ STATIC BOOLEAN      mSelfIsListed;
 STATIC UINT8        mBitsShown[CLOVER_INDEX_BITS];
 STATIC UINT8        mMarksShown[ARRAY_SIZE (mMarks)];
 
+//
+// Round 28: the ladder is a bring-up instrument and it has to stand aside when the
+// thing it was bringing up arrives.  From round 23 the tick puts one bar back per
+// millisecond, which is right while the panel's only occupant is this record and
+// wrong the moment a menu is drawn there: the healer would repaint 3.75 MiB of
+// bands over the application every thirty milliseconds, and the reader would see
+// stripes instead of a menu.  The retire is triggered by the application's own FV
+// file being loaded -- UniXNU.inf's FILE_GUID, which is the only name the firmware
+// and the volume share.  It is a fact about the boot, not about this driver, so it
+// is read off the loaded-image notify that already runs.
+//
+STATIC CONST EFI_GUID  mUniXNUApplicationFile = {
+  0x9b665204, 0xa133, 0x47a2, { 0x93, 0x96, 0x9e, 0x2b, 0x37, 0x0a, 0x4e, 0x25 }
+};
+STATIC BOOLEAN  mLadderRetired;
+
 /**
   Drain everything a protocol registration can still see and report whether that was
   anything.  A notify registration starts at the head of the interface list, so this
@@ -467,7 +483,7 @@ SlotAppeared (
   // The row may belong to a report layer (SlotIsLent), in which case the protocol still
   // has to be drained -- that is what keeps later notifications flowing -- but the band
   // is not ours to colour.
-  if (!SlotIsLent (Index)) {
+  if (!mLadderRetired && !SlotIsLent (Index)) {
     CloverCheckpointBar (mSlots[Index].Offset, mSlots[Index].Argb);
   }
 }
@@ -550,6 +566,10 @@ PaintIndex (
   UINTN   Slot;
   BOOLEAN Set;
 
+  if (mLadderRetired) {
+    return;
+  }
+
   if (Index > CLOVER_INDEX_MAX) {
     Index = CLOVER_INDEX_MAX;
   }
@@ -575,6 +595,10 @@ PaintMark (
   IN UINTN  Index
   )
 {
+  if (mLadderRetired) {
+    return;
+  }
+
   if (mMarksShown[Index] != 0) {
     return;
   }
@@ -621,6 +645,19 @@ ImageLoaded (
 
     File = FirmwareFileOf (LoadedImage->FilePath);
     if (File == NULL) {
+      continue;
+    }
+
+    //
+    // The application this whole bring-up instrument exists to get started has
+    // arrived: stop touching the panel from here on, or the tick will fight the
+    // menu for it.
+    //
+    if (CompareGuid (File, &mUniXNUApplicationFile)) {
+      mLadderRetired = TRUE;
+      mLastImageBase = (UINT64)(UINTN)LoadedImage->ImageBase;
+      mLastImageSize = (UINT64)(UINTN)LoadedImage->ImageSize;
+      mHaveLastImage = (BOOLEAN)(mLastImageSize != 0);
       continue;
     }
 
@@ -1370,6 +1407,12 @@ PaintTickAs (
   IN UINT32  Argb
   )
 {
+  // Round 28: once the application owns the panel, a sample that changes on every
+  // tick would repaint two bands per millisecond over its menu.
+  if (mLadderRetired) {
+    return;
+  }
+
   CloverCheckpointBar (mSlots[mTickBits[Index].Row].Offset, Argb);
 }
 
@@ -1416,6 +1459,11 @@ HealBar (
   UINT64            Offset;
   UINT32            Expected;
   volatile UINT32   *Pixels;
+
+  // Round 28: the menu owns the panel from the moment its application loads.
+  if (mLadderRetired) {
+    return;
+  }
 
   Index        = mHealCursor;
   mHealCursor  = Index + 1;

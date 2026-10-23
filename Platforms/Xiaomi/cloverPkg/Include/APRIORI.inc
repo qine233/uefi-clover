@@ -44,7 +44,19 @@ APRIORI DXE {
   INF Binaries/clover/QcomPkg/Drivers/GLinkDxe/GLinkDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/ULogDxe/ULogDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/NpaDxe/NpaDxe.inf
-  INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
+  #
+  # Round 16: ClockDxe is out.  Round 15's photograph named it -- the last image the DXE
+  # core loaded was its FVMAIN file, and its own band stayed dark, so the queue stopped
+  # inside its entry point and never reached anything listed below line 47.
+  #
+  # Taking it out of this list is not the same as taking it out of the boot.  Everything
+  # here is dispatched by list position with no depex evaluation at all, so the four
+  # blobs that name gClockProtocolGuid -- SdccDxe, DisplayDxe, I2CDxe and SPIDxe -- are
+  # still started, and what they do without a clock producer is the reading this build is
+  # after.  If the queue now reaches BdsDxe, the clock driver was the only hang; if it
+  # stops on one of those four, the index meter says which.
+  #
+  #  INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
 
   INF MdeModulePkg/Universal/Disk/DiskIoDxe/DiskIoDxe.inf
   INF MdeModulePkg/Universal/Disk/PartitionDxe/PartitionDxe.inf

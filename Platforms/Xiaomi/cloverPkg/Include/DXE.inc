@@ -56,7 +56,13 @@
   INF MdeModulePkg/Universal/Disk/UnicodeCollation/EnglishDxe/EnglishDxe.inf
 
   INF Binaries/clover/QcomPkg/Drivers/DALSYSDxe/DALSYSDxe.inf
-  INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
+  #
+  # Round 16: out of the volume as well as out of APRIORI.inc, so no dependency
+  # evaluation can bring it back after the queue drains.  Its FVMAIN file number was 38;
+  # every file after it moves down one, which is why scripts/fv-order.py has to be
+  # re-exported against the new FV before a photograph is decoded.
+  #
+  #  INF Binaries/clover/QcomPkg/Drivers/ClockDxe/ClockDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/HWIODxe/HWIODxe.inf
   INF Binaries/clover/QcomPkg/Drivers/I2CDxe/I2CDxe.inf
   INF Binaries/clover/QcomPkg/Drivers/SPIDxe/SPIDxe.inf

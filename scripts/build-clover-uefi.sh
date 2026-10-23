@@ -98,13 +98,39 @@ ssh bash -c 'rsync -a --delete --exclude /Build/ --exclude /Conf/ '"$CHECKOUT"'/
 # After the sync, and never before it: stuart_update installs its external
 # dependencies inside the tree (Mu_Basecore/CryptoPkg/Binaries, Mu_Basecore/
 # BaseTools/Bin), and the rsync above would delete them again.
+#
+# Those two dependencies are GitHub release assets, and github.com resets the TLS
+# handshake from this network often enough that a whole build round has been lost to
+# "External Dependencies in the environment are out of date".  stuart has a cache for
+# exactly this, keyed by sha1(version || source) and pointed at by the shell variable
+# STUART_EXTDEP_CACHE_PATH, but nothing sets it by default.  Seed it first, from the
+# mirror, and the update step below becomes a local file copy.
+#
+# The cache lives in the guest, so its path has to be resolved *there*: a leading "~"
+# written into a double-quoted string is expanded by this host shell first, and the
+# first run of this step duly told stuart to look in /Users/zhouzhou/.mu_extdeps --
+# a directory the VM has never had.  Asking the guest for $HOME costs one ssh round
+# trip and makes the value correct by construction.
+if [ -z "${EXTDEP_CACHE:-}" ]; then
+  EXTDEP_CACHE=$(ssh bash -c 'echo $HOME/.mu_extdeps')
+fi
+if [ -f "$OVERLAY/scripts/seed-clover-extdeps.py" ]; then
+  echo "==> seeding the external-dependency cache in the guest at $EXTDEP_CACHE"
+  python3 "$OVERLAY/scripts/seed-clover-extdeps.py" --profile "$PROFILE" || {
+    echo "could not seed the cache; stuart_update will have to reach github.com itself" >&2
+  }
+fi
 echo "==> stuart_update"
 # Retried, because `colima ssh` itself fails here now and then -- the guest is up,
 # `colima status` is happy, and the ssh session still exits 1 with no output at
 # all.  Twice in a row it looked like a build failure and cost a full round trip;
 # the command is idempotent, so the cheap answer is to try it again.
+#
+# pipefail matters: piped through tail, the ssh session exits 0 even when stuart
+# answered "We were unable to successfully update 2 dependencies", so the retry loop
+# never retried and the real failure surfaced three steps later as a build error.
 for attempt in 1 2 3; do
-  if ssh bash -c 'cd ~/mu-build && ~/.venv-edk2/bin/python Platforms/Xiaomi/cloverPkg/DeviceBuild.py --update -t RELEASE 2>&1 | tail -n 8'; then
+  if ssh bash -c 'set -o pipefail && cd ~/mu-build && STUART_EXTDEP_CACHE_PATH='"$EXTDEP_CACHE"' ~/.venv-edk2/bin/python Platforms/Xiaomi/cloverPkg/DeviceBuild.py --update -t RELEASE 2>&1 | tail -n 8'; then
     break
   fi
   [ "$attempt" = 3 ] && { echo "stuart_update failed on all $attempt attempts" >&2; exit 1; }

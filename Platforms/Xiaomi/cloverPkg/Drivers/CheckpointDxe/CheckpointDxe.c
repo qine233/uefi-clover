@@ -23,7 +23,10 @@
   That acquits the volume enumeration and puts the honest question somewhere else:
   VariableRuntimeDxe (file 13) is listed ahead of MetronomeDxe (18), which lit, yet
   both of its bands stayed dark, and a Depex TRUE driver cannot be starved.  It must
-  have run and returned without installing.  A FirmwareVolumeBlock band is added
+  have run and returned without installing.  (Round 15 withdrew this:  both drivers are
+  in the apriori list, and it, not depex, is what sets the order -- VariableRuntimeDxe
+  sits below the hang like everything else in the dark.  The sentence is kept because
+  it is why an FVB band was added, and the FVB band is worth having.)  A FirmwareVolumeBlock band is added
   because that is what it would have needed to do so, and DxeCore derives FV2 from
   FVB (FwVol.c:622), so the two bands together say whether any volume was readable
   at all.
@@ -74,11 +77,18 @@
   something), red when an image was loaded whose file was not (a volume or numbering
   problem, whatever the bands say).
 
+  Round 15 read this instrument and it answered: all three marks lit what they should,
+  the seven bits decoded to FVMAIN file 38, ClockDxe, and its own band stayed dark.
+  Both surviving guesses from round 14 died there.  The variable, monotonic and RTC
+  bands were never a hole -- see the order rule by the slot table, they are queued below
+  the hang -- and the file numbers those rows carried described the volume, not the
+  dispatch, which is the axis that actually matters here.
+
   Cyan is EDK II, red is Qualcomm, white is the display, black is a stage this boot
   did not reach, and yellow is data rather than progress.  Order in the slot table is
-  the order the DXE core reaches things, which for the storage drivers is their
-  dependency order rather than their order in the volume: PartitionDxe is file 34
-  and SdccDxe is 43, and the partitions cannot exist before the eMMC does.
+  order in Include/APRIORI.inc, which for this build is the dispatch order itself: the
+  apriori entries are queued by list position with no depex evaluation, so the panel is
+  a prefix and the last lit row is the last driver the queue reached.
 
   Drawing nothing through the UEFI display stack and returning EFI_SUCCESS is the
   point: a bar here cannot be the reason a boot stops.
@@ -151,51 +161,80 @@ STATIC EFI_GUID  mHardwareInterruptProtocolGuid = {
 // index needs seven more.  scripts/check-clover-uefi.py fails the build if any offset
 // leaves the filled window or a band overlaps its neighbour.
 //
+// ORDER RULE, and it is the one round 14 did not know:  this table runs in
+// Include/APRIORI.inc line order, because that file lists every DXE module this volume
+// has, and CoreDispatchAllAprioriFiles (MdeModulePkg/Core/Dxe/Dispatcher/Dispatcher.c,
+// the loop over AprioriEntryCount) inserts a match at the tail of mScheduledQueue with
+// no depex evaluation at all -- the drain loop in CoreDispatcher then loads and starts
+// in that order, straight through.  So the panel is a prefix:  the last lit row is the
+// last driver the queue reached, and everything below it is simply not started yet.
+//
+// That retraction is why the rows moved.  Round 14 read "the write interface, the
+// monotonic counter and the RTC are dark while bands around them are lit -- a hole, so
+// those drivers ran and returned without installing their arch protocols".  They are
+// listed at APRIORI.inc lines 59, 60 and 62, which is *below* ClockDxe at 47, the
+// driver the index meter names.  They never ran; the hole was this table putting them
+// near the top.  Depex TRUE only means a driver cannot be starved in the ordinary loop,
+// and this build barely has an ordinary loop.
+//
+// The file numbers the older rows carried are gone on purpose:  FV file order is the
+// FDF's packing order, which is a different axis from the dispatch order, and dropping
+// a module shifts every later index.  scripts/fv-order.py is the only honest source for
+// those, and the reader already resolves the meter's number through it.
+//
 STATIC CONST struct {
   EFI_GUID   *Guid;
   UINT64     Offset;
   UINT32     Argb;
   CHAR8      *Name;
 } mSlots[] = {
-  // DxeCore publishes both of these before APRIORI runs, so a dark band here is now
-  // a real reading rather than the round-13 artifact.
+  // DxeCore publishes both of these while it walks the FV HOBs, before any APRIORI
+  // driver runs, so a dark band here is a real reading rather than the round-13 artifact.
   { &gEfiFirmwareVolume2ProtocolGuid,          0x00140000, CLOVER_COLOR_CYAN,  "FV2: volumes enumerated from HOBs"       },
   { &gEfiFirmwareVolumeBlockProtocolGuid,      0x00180000, CLOVER_COLOR_CYAN,  "FVB: the store a variable driver needs"  },
 
-  { &gEfiCpuArchProtocolGuid,                  0x001C0000, CLOVER_COLOR_CYAN,  "ArmCpuDxe"                               },
+  // APRIORI DXE line 30.
+  { &gEfiCpuArchProtocolGuid,                  0x001C0000, CLOVER_COLOR_CYAN,  "ArmCpuDxe (apriori 30)"                  },
 
-  // Both of these belong to VariableRuntimeDxe, file 13, Depex TRUE and listed ahead
-  // of MetronomeDxe, which lit in round 13.  If they stay dark while FVB above them
-  // lights, that driver ran and returned without installing them.  Round 14 says it
-  // did: the write interface and the read interface go together, so one band is enough
-  // and the second one now watches a different Depex TRUE driver instead -- the
-  // monotonic counter at file 14, which sits in the gap that came out dark.
-  { &gEfiVariableWriteArchProtocolGuid,        0x00200000, CLOVER_COLOR_CYAN,  "VariableRuntimeDxe (Depex TRUE)"         },
-  { &gEfiMonotonicCounterArchProtocolGuid,     0x00240000, CLOVER_COLOR_CYAN,  "EmbeddedMonotonicCounter, file 14"       },
-  { &gEfiRealTimeClockArchProtocolGuid,        0x00280000, CLOVER_COLOR_CYAN,  "RealTimeClock, file 17"                  },
+  // Named by ten vendor blobs and declared by nothing in this tree, so it has to come
+  // from one of them.  Where in the queue it appears is not known; it is placed after
+  // the CPU because it has lit this far up every round it was watched.
+  { &mVendorFanInGuid,                         0x00200000, CLOVER_COLOR_RED,   "the GUID ten blobs wait on"              },
 
-  // The Qualcomm chain, in the order its depex sections can be satisfied.  The
-  // fan-in GUID is named by ten blobs and declared by nothing in this tree, so it
-  // has to come from one of them.
-  { &mVendorFanInGuid,                         0x002C0000, CLOVER_COLOR_RED,   "the GUID ten blobs wait on"              },
-  { &mHardwareInterruptProtocolGuid,           0x00300000, CLOVER_COLOR_CYAN,  "ArmGicDxe, file 26"                      },
-  { &gEfiTimerArchProtocolGuid,                0x00340000, CLOVER_COLOR_CYAN,  "ArmTimerDxe, file 27"                    },
-  { &mChipInfoProtocolGuid,                    0x00380000, CLOVER_COLOR_RED,   "ChipInfoDxe, file 28"                    },
-  { &mSmemProtocolGuid,                        0x003C0000, CLOVER_COLOR_RED,   "SmemDxe, file 30: last thing that lit"   },
+  // Lines 31, 32, 36 and 39:  the Qualcomm chain around the hang.  mHardwareInterrupt
+  // is EmbeddedPkg.dec's gHardwareInterruptProtocolGuid, which the timer waits on.
+  { &mHardwareInterruptProtocolGuid,           0x00240000, CLOVER_COLOR_CYAN,  "ArmGicDxe (apriori 31)"                  },
+  { &gEfiTimerArchProtocolGuid,                0x00280000, CLOVER_COLOR_CYAN,  "ArmTimerDxe (apriori 32)"                },
+  { &mSmemProtocolGuid,                        0x002C0000, CLOVER_COLOR_RED,   "SmemDxe (apriori 36)"                    },
+  { &mChipInfoProtocolGuid,                    0x00300000, CLOVER_COLOR_RED,   "ChipInfoDxe (apriori 39)"                },
 
-  // Round 13's first dark producer below the last lit one, and the one that matters
-  // downstream: DisplayDxe and SdccDxe both wait on this GUID.
-  { &mClockProtocolGuid,                       0x00400000, CLOVER_COLOR_RED,   "ClockDxe, file 38"                       },
+  // Line 47, and round 15's reading:  this is where the queue stopped.  Nothing in this
+  // tree declares the GUID, so no module of ours can answer for it -- the four blobs
+  // that wait on it are SdccDxe, DisplayDxe, I2CDxe and SPIDxe.  Round 16 takes
+  // ClockDxe out of the queue entirely, which also means a dark row here no longer
+  // proves a hang:  it only proves nobody produced the clock.
+  { &mClockProtocolGuid,                       0x00340000, CLOVER_COLOR_RED,   "the clock protocol (ClockDxe out)"       },
 
-  { &gEfiBlockIoProtocolGuid,                  0x00440000, CLOVER_COLOR_CYAN,  "BlockIo: SdccDxe, the eMMC, file 43"     },
-  { &gEfiPartitionInfoProtocolGuid,            0x00480000, CLOVER_COLOR_CYAN,  "PartitionDxe: partitions parsed"          },
-  { &gEfiGraphicsOutputProtocolGuid,           0x004C0000, CLOVER_COLOR_WHITE, "the display: DisplayDxe or SimpleFbDxe"  },
+  // Lines 50, 53, 59, 60, 62, 67 and 89, all of which round 15 found dark because they
+  // sit below the hang.  Because the queue ignores depex, all of them are still *started*
+  // with the clock producer gone -- being dark here will mean the driver refused to
+  // publish without a clock, not that it was never given a turn.
+  { &gEfiPartitionInfoProtocolGuid,            0x00380000, CLOVER_COLOR_CYAN,  "PartitionDxe (apriori 50)"               },
+  { &gEfiBlockIoProtocolGuid,                  0x003C0000, CLOVER_COLOR_CYAN,  "BlockIo, from SdccDxe (apriori 53)"      },
+  { &gEfiVariableWriteArchProtocolGuid,        0x00400000, CLOVER_COLOR_CYAN,  "VariableRuntimeDxe (apriori 59)"         },
+  { &gEfiMonotonicCounterArchProtocolGuid,     0x00440000, CLOVER_COLOR_CYAN,  "EmbeddedMonotonicCounter (apriori 60)"   },
+  { &gEfiRealTimeClockArchProtocolGuid,        0x00480000, CLOVER_COLOR_CYAN,  "RealTimeClock (apriori 62)"              },
 
-  // Depex TRUE, so this stays the cleanest single bit of information the ladder
-  // holds: lit means the loop finished with something to do, dark with everything
-  // above it lit means it stopped on the way.
-  { &gEfiBdsArchProtocolGuid,                  0x00500000, CLOVER_COLOR_CYAN,  "BdsDxe, file 64 (Depex TRUE)"            }
+  // Line 67.  Still the cleanest single bit of information on the panel:  lit means the
+  // queue drained all the way to the boot services, dark with everything above it lit
+  // means it stopped on the way.
+  { &gEfiBdsArchProtocolGuid,                  0x004C0000, CLOVER_COLOR_CYAN,  "BdsDxe (apriori 67)"                     },
+
+  // Line 89, below BDS in the vendor's own ordering, so the display is last by
+  // construction rather than by starvation.
+  { &gEfiGraphicsOutputProtocolGuid,           0x00500000, CLOVER_COLOR_WHITE, "the display (apriori 89, below BDS)"     }
 };
+
 
 //
 // The last loaded image's FVMAIN file index, most significant bit first, at the
